@@ -6,7 +6,8 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from app import db
-from app.security import hash_value, sanitize_filename
+from app.config import Settings
+from app.security import hash_value, is_allowed_origin, sanitize_filename
 
 
 def create_room(client):
@@ -71,3 +72,31 @@ def test_websocket_forbidden_message_type_is_rejected(client):
     row = db.fetch_one("SELECT * FROM security_events WHERE event_type = 'websocket_forbidden_message'")
     assert row is not None
     assert row["detail"] == "forbidden message type: file-chunk"
+
+
+def test_public_origins_split_strip_and_allow_multiple(monkeypatch):
+    monkeypatch.setenv("PUBLIC_ORIGINS", " https://files.sexyminup.site, https://files.dcout.site/ ")
+    monkeypatch.delenv("PUBLIC_ORIGIN", raising=False)
+    settings = Settings.from_env()
+    assert settings.public_origins == ["https://files.sexyminup.site", "https://files.dcout.site"]
+    assert "https://files.sexyminup.site" in settings.allowed_origins
+    assert "https://files.dcout.site" in settings.allowed_origins
+    assert is_allowed_origin("https://files.dcout.site/", settings)
+
+
+def test_public_origin_backward_compatibility(monkeypatch):
+    monkeypatch.delenv("PUBLIC_ORIGINS", raising=False)
+    monkeypatch.setenv("PUBLIC_ORIGIN", " https://legacy.example.com/ ")
+    settings = Settings.from_env()
+    assert settings.public_origins == ["https://legacy.example.com"]
+    assert is_allowed_origin("https://legacy.example.com", settings)
+
+
+def test_websocket_origin_check_uses_public_origins(client, monkeypatch):
+    monkeypatch.setenv("PUBLIC_ORIGINS", "https://files.sexyminup.site, https://files.dcout.site")
+    created = create_room(client)
+    with client.websocket_connect(
+        f"/ws/{created['room_id']}/sender",
+        headers={"origin": "https://files.dcout.site"},
+    ) as websocket:
+        websocket.send_json({"type": "heartbeat"})

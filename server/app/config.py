@@ -34,11 +34,33 @@ def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _normalize_origins(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        origin = value.strip().rstrip("/")
+        if origin and origin not in seen:
+            normalized.append(origin)
+            seen.add(origin)
+    return normalized
+
+
+def _public_origins_from_env() -> list[str]:
+    configured_origins = _split_csv(os.getenv("PUBLIC_ORIGINS", ""))
+    legacy_origin = os.getenv("PUBLIC_ORIGIN", "")
+    if legacy_origin:
+        configured_origins.append(legacy_origin)
+    if not configured_origins:
+        configured_origins.append("https://files.sexyminup.site")
+    return _normalize_origins(configured_origins)
+
+
 @dataclass(frozen=True)
 class Settings:
     app_host: str
     app_port: int
     public_origin: str
+    public_origins: list[str]
     database_url: str
     room_ttl_minutes: int
     active_transfer_idle_timeout_seconds: int
@@ -57,10 +79,12 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         _load_env_file()
+        public_origins = _public_origins_from_env()
         return cls(
             app_host=os.getenv("APP_HOST", "127.0.0.1"),
             app_port=_int_env("APP_PORT", 8010),
-            public_origin=os.getenv("PUBLIC_ORIGIN", "https://files.sexyminup.site").rstrip("/"),
+            public_origin=public_origins[0],
+            public_origins=public_origins,
             database_url=os.getenv("DATABASE_URL", "sqlite:///./data/app.db"),
             room_ttl_minutes=_int_env("ROOM_TTL_MINUTES", 30),
             active_transfer_idle_timeout_seconds=_int_env("ACTIVE_TRANSFER_IDLE_TIMEOUT_SECONDS", 180),
@@ -93,7 +117,7 @@ class Settings:
 
     @property
     def allowed_origins(self) -> list[str]:
-        origins = {self.public_origin}
+        origins = set(self.public_origins)
         origins.add(f"http://{self.app_host}:{self.app_port}")
         origins.add(f"http://localhost:{self.app_port}")
         origins.add(f"http://127.0.0.1:{self.app_port}")

@@ -73,7 +73,13 @@ pip install -r requirements.txt
 cp ../.env.example .env
 ```
 
-`.env`에서 `IP_HASH_SALT`, `ADMIN_PASSWORD`, `PUBLIC_ORIGIN`을 실제 값으로 바꾼 뒤:
+`.env`에서 `IP_HASH_SALT`, `ADMIN_PASSWORD`, `PUBLIC_ORIGINS`를 실제 값으로 바꾼 뒤:
+
+```text
+PUBLIC_ORIGINS=https://files.sexyminup.site,https://files.dcout.site
+```
+
+기존 단일 설정인 `PUBLIC_ORIGIN=https://files.sexyminup.site`도 backward compatibility로 계속 지원됩니다.
 
 ```bash
 uvicorn app.main:app --host 127.0.0.1 --port 8010

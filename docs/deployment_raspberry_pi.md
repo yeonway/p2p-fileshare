@@ -22,11 +22,13 @@ cp ../.env.example .env
 `.env`에서 반드시 변경합니다.
 
 ```text
-PUBLIC_ORIGIN=https://files.sexyminup.site
+PUBLIC_ORIGINS=https://files.sexyminup.site,https://files.dcout.site
 IP_HASH_SALT=<random-secret>
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<strong-password>
 ```
+
+여러 외부 도메인을 허용해야 하면 `PUBLIC_ORIGINS`에 쉼표로 구분해 입력합니다. 각 값은 공백을 제거한 뒤 CORS와 WebSocket Origin check에 함께 사용됩니다. 기존 `PUBLIC_ORIGIN=https://files.sexyminup.site` 단일 설정도 backward compatibility로 계속 지원됩니다.
 
 ## 2. 로컬 실행 확인
 
