@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>파일 받기 - Raspberry Pi P2P File Share</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <main class="shell">
+        <nav class="topbar">
+            <a href="/">P2P File Share</a>
+            <a href="/send">파일 보내기</a>
+        </nav>
+
+        <section class="panel">
+            <h1>파일 받기</h1>
+            <p class="muted">파일은 서버를 거치지 않고 WebRTC DataChannel로 전송됩니다.</p>
+
+            <div class="field code-input">
+                <label for="codeInput">6자리 코드</label>
+                <input id="codeInput" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="123456">
+            </div>
+
+            <div class="actions">
+                <button id="lookupButton" class="button primary" type="button">파일 정보 확인</button>
+                <button id="connectButton" class="button hidden" type="button">저장 위치 선택 및 연결</button>
+            </div>
+            <p id="errorText" class="error" role="alert"></p>
+            <p id="fallbackWarning" class="warning hidden">이 브라우저는 저장 위치 선택 API를 지원하지 않아 완료 전까지 메모리에 보관합니다. 대용량 파일은 브라우저/기기 상태에 따라 중단될 수 있습니다.</p>
+        </section>
+
+        <section id="transferPanel" class="panel hidden">
+            <dl class="status-grid">
+                <div><dt>파일</dt><dd id="fileNameText">-</dd></div>
+                <div><dt>크기</dt><dd id="fileSizeText">-</dd></div>
+                <div><dt>MIME</dt><dd id="mimeText">-</dd></div>
+                <div><dt>WebRTC</dt><dd id="rtcStatusText">대기 중</dd></div>
+                <div><dt>연결 경로</dt><dd id="pathStatusText">확인 전</dd></div>
+                <div><dt>상태</dt><dd id="transferStatusText">대기 중</dd></div>
+            </dl>
+
+            <div class="progress-wrap">
+                <progress id="progressBar" value="0" max="100"></progress>
+                <div class="progress-meta">
+                    <span id="progressText">0%</span>
+                    <span id="speedText">0 B/s</span>
+                    <span id="etaText">남은 시간 -</span>
+                </div>
+            </div>
+
+            <a id="downloadLink" class="button hidden" href="#">받은 파일 저장</a>
+        </section>
+    </main>
+
+    <script src="/static/js/common.js"></script>
+    <script src="/static/js/webrtc_protocol.js"></script>
+    <script src="/static/js/receive.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+[Unit]
+Description=P2P File Share FastAPI App
+After=network.target
+
+[Service]
+User=user
+WorkingDirectory=/home/user/server/p2p-fileshare/server
+EnvironmentFile=/home/user/server/p2p-fileshare/server/.env
+ExecStart=/home/user/server/p2p-fileshare/server/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

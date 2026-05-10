@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>전송 기록 - Raspberry Pi P2P File Share</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <main class="shell wide">
+        <nav class="topbar">
+            <a href="/">P2P File Share</a>
+        </nav>
+        <section class="panel">
+            <h1>전송 기록</h1>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>created_at</th>
+                            <th>status</th>
+                            <th>file_name</th>
+                            <th>file_size</th>
+                            <th>mime_type</th>
+                            <th>sender</th>
+                            <th>receiver</th>
+                            <th>sender_ip_hash</th>
+                            <th>receiver_ip_hash</th>
+                            <th>connected_at</th>
+                            <th>started_at</th>
+                            <th>completed_at</th>
+                            <th>fail_reason</th>
+                            <th>direct_p2p</th>
+                            <th>turn_used</th>
+                            <th>duration</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in rows %}
+                        <tr>
+                            <td>{{ row.created_at }}</td>
+                            <td>{{ row.status }}</td>
+                            <td>{{ row.file_name }}</td>
+                            <td>{{ row.file_size }}</td>
+                            <td>{{ row.mime_type }}</td>
+                            <td>{{ row.sender_client_type }}</td>
+                            <td>{{ row.receiver_client_type }}</td>
+                            <td>{{ row.sender_ip_hash_short }}</td>
+                            <td>{{ row.receiver_ip_hash_short }}</td>
+                            <td>{{ row.connected_at }}</td>
+                            <td>{{ row.started_at }}</td>
+                            <td>{{ row.completed_at }}</td>
+                            <td>{{ row.fail_reason }}</td>
+                            <td>{{ row.direct_p2p }}</td>
+                            <td>{{ row.turn_used }}</td>
+                            <td>{{ row.transfer_duration_seconds }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+</body>
+</html>

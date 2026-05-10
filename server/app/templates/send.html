@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>파일 보내기 - Raspberry Pi P2P File Share</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <main class="shell">
+        <nav class="topbar">
+            <a href="/">P2P File Share</a>
+            <a href="/receive">파일 받기</a>
+        </nav>
+
+        <section class="panel">
+            <h1>파일 보내기</h1>
+            <p class="muted">코드는 30분 동안 새 접속에만 유효합니다. 전송이 시작되면 완료될 때까지 유지됩니다.</p>
+
+            <div class="field">
+                <label for="fileInput">보낼 파일</label>
+                <input id="fileInput" type="file">
+            </div>
+
+            <button id="createRoomButton" class="button primary" type="button">6자리 코드 생성</button>
+            <p id="errorText" class="error" role="alert"></p>
+        </section>
+
+        <section id="transferPanel" class="panel hidden">
+            <div class="code-row">
+                <div>
+                    <span class="label">6자리 코드</span>
+                    <strong id="roomCode" class="code">------</strong>
+                </div>
+                <div>
+                    <span class="label">새 접속 가능 시간</span>
+                    <strong id="ttlText">--:--</strong>
+                </div>
+            </div>
+
+            <dl class="status-grid">
+                <div><dt>파일</dt><dd id="fileNameText">-</dd></div>
+                <div><dt>크기</dt><dd id="fileSizeText">-</dd></div>
+                <div><dt>수신자</dt><dd id="receiverStatusText">대기 중</dd></div>
+                <div><dt>WebRTC</dt><dd id="rtcStatusText">대기 중</dd></div>
+                <div><dt>연결 경로</dt><dd id="pathStatusText">확인 전</dd></div>
+                <div><dt>상태</dt><dd id="transferStatusText">대기 중</dd></div>
+            </dl>
+
+            <div class="progress-wrap">
+                <progress id="progressBar" value="0" max="100"></progress>
+                <div class="progress-meta">
+                    <span id="progressText">0%</span>
+                    <span id="speedText">0 B/s</span>
+                    <span id="etaText">남은 시간 -</span>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/js/common.js"></script>
+    <script src="/static/js/webrtc_protocol.js"></script>
+    <script src="/static/js/send.js"></script>
+</body>
+</html>
