@@ -20,6 +20,7 @@ SendAnywhere처럼 6자리 코드로 파일을 주고받는 P2P 파일 전송 MV
 - Web sender/receiver MVP
 - File System Access API 기반 chunk 즉시 저장
 - Blob fallback 및 대용량 경고
+- 기본 chunk size 64KB
 - 6자리 코드, 30분 신규 접속 TTL
 - active transfer idle timeout 기본 180초
 - SQLite metadata/status/security event 저장
@@ -108,7 +109,7 @@ sudo systemctl reload caddy
 
 ## 대용량 파일과 화질
 
-파일은 `File.slice()`와 DataChannel binary chunk로 전송되며 동영상/이미지/오디오를 decode, encode, 압축, 변환하지 않습니다. 수신 측은 가능한 경우 File System Access API로 chunk를 즉시 디스크에 씁니다. 따라서 원본 bytes가 그대로 전달되고 화질 저하가 발생하지 않습니다.
+파일은 `File.slice()`와 DataChannel binary chunk로 전송되며 동영상/이미지/오디오를 decode, encode, 압축, 변환하지 않습니다. 수신 측은 가능한 경우 File System Access API로 chunk를 즉시 디스크에 씁니다. 기본 chunk size는 외부망/TURN 안정성을 위해 64KB입니다. 따라서 원본 bytes가 그대로 전달되고 화질 저하가 발생하지 않습니다.
 
 ## 미완성/제한사항
 

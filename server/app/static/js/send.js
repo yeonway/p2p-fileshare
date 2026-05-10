@@ -12,8 +12,12 @@
         transferId: null,
         startedAt: null,
         bytesSent: 0,
+        ackedBytes: 0,
         chunksSent: 0,
         sendingStarted: false,
+        senderFinished: false,
+        receiverComplete: false,
+        effectiveChunkSize: null,
         lastServerProgressAt: 0,
         ttlTimer: null
     };
@@ -111,58 +115,83 @@
 
     function setupControlChannel() {
         state.controlChannel.onopen = function () {
-            var chunkSize = state.config.chunkSizeBytes;
+            state.effectiveChunkSize = P2P.resolveChunkSize(state.config, state.pc);
+            P2P.configureFileChannel(state.fileChannel, state.effectiveChunkSize);
             state.controlChannel.send(JSON.stringify({
                 type: "manifest",
                 transfer_id: state.transferId,
                 file_name: state.file.name,
                 file_size: state.file.size,
                 mime_type: state.file.type || "application/octet-stream",
-                chunk_size: chunkSize,
-                chunk_count: Math.ceil(state.file.size / chunkSize),
+                chunk_size: state.effectiveChunkSize,
+                chunk_count: Math.ceil(state.file.size / state.effectiveChunkSize),
                 hash_algorithm: null
             }));
         };
         state.controlChannel.onmessage = async function (event) {
             var message = JSON.parse(event.data);
-            if (message.type === "ack" && message.received_bytes === 0 && !state.sendingStarted) {
-                await sendFileChunks();
-            } else if (message.type === "ack") {
-                App.updateProgress(message.received_bytes, state.file.size, state.startedAt);
-            } else if (message.type === "complete") {
-                App.setText("transferStatusText", "완료");
-                App.updateProgress(state.file.size, state.file.size, state.startedAt);
-                App.sendWs(state.ws, {
-                    type: "transfer-completed",
-                    total_bytes: message.total_bytes,
-                    direct_p2p: App.byId("pathStatusText").textContent !== "TURN relay",
-                    turn_used: App.byId("pathStatusText").textContent === "TURN relay"
-                });
+            if (message.type === "ack") {
+                handleAck(message);
+                if (message.received_bytes === 0 && !state.sendingStarted) {
+                    try {
+                        await sendFileChunks();
+                    } catch (error) {
+                        failTransfer(error.message);
+                    }
+                }
+            } else if (message.type === "receiver-complete" || message.type === "complete") {
+                handleReceiverComplete(message);
             } else if (message.type === "error") {
-                App.setText("transferStatusText", "실패");
-                setError(message.message || "전송 실패");
-                App.sendWs(state.ws, { type: "transfer-failed", reason: message.message || "receiver error" });
+                failTransfer(message.message || "수신자 오류");
             }
         };
+    }
+
+    function handleAck(message) {
+        if (typeof message.received_bytes !== "number") {
+            return;
+        }
+        state.ackedBytes = Math.max(state.ackedBytes, message.received_bytes);
+        App.updateProgress(state.ackedBytes, state.file.size, state.startedAt);
+        if (!state.receiverComplete && state.senderFinished) {
+            App.setText("transferStatusText", "수신 완료 확인 대기 중");
+        }
+    }
+
+    function handleReceiverComplete(message) {
+        if (message.total_bytes !== state.file.size) {
+            failTransfer("수신 완료 크기가 원본과 일치하지 않습니다.");
+            return;
+        }
+        state.receiverComplete = true;
+        App.setText("transferStatusText", "완료");
+        App.updateProgress(state.file.size, state.file.size, state.startedAt);
+    }
+
+    function failTransfer(message) {
+        App.setText("transferStatusText", "실패");
+        setError(message);
+        App.sendWs(state.ws, { type: "transfer-failed", reason: message });
     }
 
     async function sendFileChunks() {
         state.sendingStarted = true;
         state.startedAt = performance.now();
         state.bytesSent = 0;
+        state.ackedBytes = 0;
         state.chunksSent = 0;
         App.setText("transferStatusText", "전송 중");
+        App.updateProgress(0, state.file.size, state.startedAt);
         App.sendWs(state.ws, { type: "transfer-started" });
         await P2P.waitForOpen(state.fileChannel);
 
-        var chunkSize = state.config.chunkSizeBytes;
+        var chunkSize = state.effectiveChunkSize || P2P.resolveChunkSize(state.config, state.pc);
         for (var offset = 0; offset < state.file.size; offset += chunkSize) {
             var chunk = await state.file.slice(offset, Math.min(offset + chunkSize, state.file.size)).arrayBuffer();
             await P2P.waitForBufferedAmount(state.fileChannel, chunkSize);
             state.fileChannel.send(chunk);
             state.bytesSent += chunk.byteLength;
             state.chunksSent += 1;
-            App.updateProgress(state.bytesSent, state.file.size, state.startedAt);
             var now = Date.now();
             if (now - state.lastServerProgressAt >= 1000) {
                 state.lastServerProgressAt = now;
@@ -173,12 +202,20 @@
             }
         }
 
+        App.setText("transferStatusText", "전송 큐 비우는 중");
+        await P2P.waitForDrain(
+            state.fileChannel,
+            state.fileChannel.bufferedAmountLowThreshold || chunkSize,
+            (state.config.activeTransferIdleTimeoutSeconds || 180) * 1000
+        );
+        state.senderFinished = true;
         state.controlChannel.send(JSON.stringify({
-            type: "complete",
+            type: "sender-finished",
             transfer_id: state.transferId,
-            total_bytes: state.file.size
+            total_bytes: state.file.size,
+            last_chunk_index: state.chunksSent - 1
         }));
-        App.setText("transferStatusText", "수신 확인 대기 중");
+        App.setText("transferStatusText", "수신 완료 확인 대기 중");
     }
 
     document.addEventListener("DOMContentLoaded", function () {

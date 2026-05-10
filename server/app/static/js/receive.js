@@ -1,6 +1,8 @@
 (function () {
     "use strict";
 
+    var ACK_CHUNK_INTERVAL = 16;
+
     var state = {
         config: null,
         room: null,
@@ -17,7 +19,12 @@
         chunkIndex: -1,
         startedAt: null,
         lastAckAt: 0,
-        lastServerProgressAt: 0
+        lastServerProgressAt: 0,
+        senderFinished: false,
+        finalizing: false,
+        completed: false,
+        failed: false,
+        missingDataTimer: null
     };
 
     function setError(message) {
@@ -121,11 +128,10 @@
             var message = JSON.parse(event.data);
             if (message.type === "manifest") {
                 handleManifest(message);
-            } else if (message.type === "complete") {
-                finalizeReceive(message);
+            } else if (message.type === "sender-finished" || message.type === "complete") {
+                handleSenderFinished(message);
             } else if (message.type === "error") {
-                App.setText("transferStatusText", "실패");
-                setError(message.message || "송신자 오류");
+                failTransfer(message.message || "송신자 오류");
             }
         };
     }
@@ -133,13 +139,18 @@
     function handleManifest(manifest) {
         state.manifest = manifest;
         if (manifest.file_size !== state.room.file_size) {
-            sendControlError("파일 크기 metadata가 일치하지 않습니다.");
+            failTransfer("파일 크기 metadata가 일치하지 않습니다.");
             return;
         }
         state.bytesReceived = 0;
         state.chunkIndex = -1;
+        state.senderFinished = false;
+        state.finalizing = false;
+        state.completed = false;
+        state.failed = false;
         state.startedAt = performance.now();
         App.setText("transferStatusText", "전송 중");
+        App.updateProgress(0, state.room.file_size, state.startedAt);
         App.sendWs(state.ws, { type: "transfer-started" });
         sendAck(true);
     }
@@ -149,16 +160,30 @@
         state.fileChannel.onmessage = function (event) {
             state.writeQueue = state.writeQueue.then(function () {
                 return writeChunk(event.data);
+            }).then(function () {
+                return maybeFinalizeReceive();
             }).catch(function (error) {
-                sendControlError(error.message);
-                App.sendWs(state.ws, { type: "transfer-failed", reason: error.message });
+                failTransfer(error.message);
             });
+        };
+        state.fileChannel.onclose = function () {
+            if (!state.completed && state.senderFinished && state.bytesReceived < expectedSize()) {
+                App.setText("transferStatusText", "남은 데이터 대기 중");
+                scheduleMissingDataTimeout();
+            }
         };
     }
 
     async function writeChunk(data) {
+        if (state.completed || state.failed) {
+            return;
+        }
         var arrayBuffer = data instanceof Blob ? await data.arrayBuffer() : data;
         var view = new Uint8Array(arrayBuffer);
+        var expected = expectedSize();
+        if (state.bytesReceived + view.byteLength > expected) {
+            throw new Error(sizeFailureMessage(expected, state.bytesReceived + view.byteLength));
+        }
         if (state.writer) {
             await state.writer.write(view);
         } else {
@@ -166,12 +191,32 @@
         }
         state.bytesReceived += view.byteLength;
         state.chunkIndex += 1;
-        App.updateProgress(state.bytesReceived, state.room.file_size, state.startedAt);
+        App.updateProgress(state.bytesReceived, expected, state.startedAt);
+        sendPeriodicAck();
+        sendPeriodicServerProgress();
+        if (state.senderFinished && state.bytesReceived < expected) {
+            scheduleMissingDataTimeout();
+        }
+    }
+
+    function expectedSize() {
+        return state.manifest ? state.manifest.file_size : state.room.file_size;
+    }
+
+    function sendPeriodicAck() {
         var now = Date.now();
-        if (now - state.lastAckAt >= 1000 || state.bytesReceived === state.room.file_size) {
+        if (
+            now - state.lastAckAt >= 1000 ||
+            state.chunkIndex % ACK_CHUNK_INTERVAL === 0 ||
+            state.bytesReceived === expectedSize()
+        ) {
             sendAck(false);
             state.lastAckAt = now;
         }
+    }
+
+    function sendPeriodicServerProgress() {
+        var now = Date.now();
         if (now - state.lastServerProgressAt >= 1000) {
             state.lastServerProgressAt = now;
             App.sendWs(state.ws, {
@@ -193,28 +238,30 @@
         }));
     }
 
-    function sendControlError(message) {
-        if (state.controlChannel && state.controlChannel.readyState === "open") {
-            state.controlChannel.send(JSON.stringify({
-                type: "error",
-                transfer_id: state.manifest ? state.manifest.transfer_id : null,
-                message: message
-            }));
-        }
-        App.setText("transferStatusText", "실패");
-        setError(message);
-    }
-
-    async function finalizeReceive(message) {
-        await state.writeQueue;
-        if (state.bytesReceived !== state.room.file_size || message.total_bytes !== state.room.file_size) {
-            sendControlError("받은 파일 크기가 원본 파일 크기와 일치하지 않습니다.");
-            App.sendWs(state.ws, {
-                type: "transfer-failed",
-                reason: "size verification failed"
-            });
+    function handleSenderFinished(message) {
+        state.senderFinished = true;
+        if (typeof message.total_bytes === "number" && message.total_bytes !== expectedSize()) {
+            failTransfer("송신자가 보고한 전체 크기가 원본 파일 크기와 일치하지 않습니다.");
             return;
         }
+        if (state.bytesReceived < expectedSize()) {
+            App.setText("transferStatusText", "남은 데이터 대기 중");
+            scheduleMissingDataTimeout();
+        }
+        maybeFinalizeReceive().catch(function (error) {
+            failTransfer(error.message);
+        });
+    }
+
+    async function maybeFinalizeReceive() {
+        if (state.completed || state.finalizing || state.failed || !state.senderFinished || !state.manifest) {
+            return;
+        }
+        if (state.bytesReceived !== expectedSize()) {
+            return;
+        }
+        clearMissingDataTimeout();
+        state.finalizing = true;
         if (state.writer) {
             await state.writer.close();
         } else {
@@ -224,12 +271,15 @@
             link.download = state.room.file_name;
             App.show("downloadLink", true);
         }
+        state.completed = true;
+        state.finalizing = false;
         App.setText("transferStatusText", "완료");
-        App.updateProgress(state.room.file_size, state.room.file_size, state.startedAt);
+        App.updateProgress(expectedSize(), expectedSize(), state.startedAt);
         state.controlChannel.send(JSON.stringify({
-            type: "complete",
+            type: "receiver-complete",
             transfer_id: state.manifest.transfer_id,
-            total_bytes: state.bytesReceived
+            total_bytes: state.bytesReceived,
+            last_chunk_index: state.chunkIndex
         }));
         App.sendWs(state.ws, {
             type: "transfer-completed",
@@ -237,6 +287,46 @@
             direct_p2p: App.byId("pathStatusText").textContent !== "TURN relay",
             turn_used: App.byId("pathStatusText").textContent === "TURN relay"
         });
+    }
+
+    function clearMissingDataTimeout() {
+        if (state.missingDataTimer) {
+            window.clearTimeout(state.missingDataTimer);
+            state.missingDataTimer = null;
+        }
+    }
+
+    function scheduleMissingDataTimeout() {
+        clearMissingDataTimeout();
+        state.missingDataTimer = window.setTimeout(function () {
+            if (!state.completed && state.bytesReceived < expectedSize()) {
+                failTransfer(sizeFailureMessage(expectedSize(), state.bytesReceived));
+            }
+        }, (state.config.activeTransferIdleTimeoutSeconds || 180) * 1000);
+    }
+
+    function sizeFailureMessage(expected, received) {
+        var missing = Math.max(0, expected - received);
+        return "받은 파일 크기가 원본 파일 크기와 일치하지 않습니다. expected size: " +
+            expected + ", received size: " + received + ", missing bytes: " + missing;
+    }
+
+    function failTransfer(message) {
+        if (state.completed || state.failed) {
+            return;
+        }
+        state.failed = true;
+        clearMissingDataTimeout();
+        if (state.controlChannel && state.controlChannel.readyState === "open") {
+            state.controlChannel.send(JSON.stringify({
+                type: "error",
+                transfer_id: state.manifest ? state.manifest.transfer_id : null,
+                message: message
+            }));
+        }
+        App.setText("transferStatusText", "실패");
+        setError(message);
+        App.sendWs(state.ws, { type: "transfer-failed", reason: message });
     }
 
     document.addEventListener("DOMContentLoaded", function () {

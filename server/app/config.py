@@ -88,7 +88,7 @@ class Settings:
             database_url=os.getenv("DATABASE_URL", "sqlite:///./data/app.db"),
             room_ttl_minutes=_int_env("ROOM_TTL_MINUTES", 30),
             active_transfer_idle_timeout_seconds=_int_env("ACTIVE_TRANSFER_IDLE_TIMEOUT_SECONDS", 180),
-            chunk_size_bytes=_int_env("CHUNK_SIZE_BYTES", 262144),
+            chunk_size_bytes=_int_env("CHUNK_SIZE_BYTES", 65536),
             ip_hash_salt=os.getenv("IP_HASH_SALT", "replace-with-random-secret"),
             admin_username=os.getenv("ADMIN_USERNAME", "admin"),
             admin_password=os.getenv("ADMIN_PASSWORD", "replace-with-strong-password"),

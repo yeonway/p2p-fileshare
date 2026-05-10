@@ -92,3 +92,9 @@ def test_code_hash_is_stored_instead_of_plain_code(client):
     row = db.fetch_one("SELECT room_code_hash FROM transfers WHERE room_id = ?", (created["room_id"],))
     assert row["room_code_hash"] != created["code"]
     assert row["room_code_hash"] == hash_value(created["code"])
+
+
+def test_default_config_chunk_size_is_64kb(client):
+    response = client.get("/api/config")
+    assert response.status_code == 200
+    assert response.json()["chunkSizeBytes"] == 65536

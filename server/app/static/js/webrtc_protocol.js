@@ -1,6 +1,7 @@
 (function () {
     "use strict";
 
+    var DEFAULT_CHUNK_SIZE = 65536;
     var HIGH_WATER_FACTOR = 16;
     var LOW_WATER_FACTOR = 4;
 
@@ -26,22 +27,58 @@
         return pc;
     }
 
+    function resolveChunkSize(config, pc) {
+        var configured = Number(config && config.chunkSizeBytes) || DEFAULT_CHUNK_SIZE;
+        var maxMessageSize = pc && pc.sctp ? Number(pc.sctp.maxMessageSize) : 0;
+        if (Number.isFinite(maxMessageSize) && maxMessageSize > 0 && configured > maxMessageSize) {
+            return Math.max(1, Math.floor(maxMessageSize));
+        }
+        return configured;
+    }
+
     function configureFileChannel(channel, chunkSize) {
         channel.binaryType = "arraybuffer";
-        channel.bufferedAmountLowThreshold = chunkSize * LOW_WATER_FACTOR;
+        channel.bufferedAmountLowThreshold = Math.max(1024, chunkSize * LOW_WATER_FACTOR);
+    }
+
+    function waitForChannelBufferBelow(channel, threshold, timeoutMs) {
+        if (channel.bufferedAmount <= threshold) {
+            return Promise.resolve();
+        }
+        return new Promise(function (resolve, reject) {
+            var settled = false;
+            var startedAt = Date.now();
+            var interval = window.setInterval(function () {
+                if (settled) {
+                    return;
+                }
+                if (channel.readyState === "closed") {
+                    settled = true;
+                    window.clearInterval(interval);
+                    reject(new Error("DataChannel closed before buffered data drained"));
+                    return;
+                }
+                if (channel.bufferedAmount <= threshold) {
+                    settled = true;
+                    window.clearInterval(interval);
+                    resolve();
+                    return;
+                }
+                if (timeoutMs && Date.now() - startedAt > timeoutMs) {
+                    settled = true;
+                    window.clearInterval(interval);
+                    reject(new Error("DataChannel bufferedAmount drain timeout"));
+                }
+            }, 50);
+        });
     }
 
     function waitForBufferedAmount(channel, chunkSize) {
-        if (channel.bufferedAmount <= chunkSize * HIGH_WATER_FACTOR) {
-            return Promise.resolve();
-        }
-        return new Promise(function (resolve) {
-            var timer = window.setTimeout(resolve, 3000);
-            channel.onbufferedamountlow = function () {
-                window.clearTimeout(timer);
-                resolve();
-            };
-        });
+        return waitForChannelBufferBelow(channel, chunkSize * HIGH_WATER_FACTOR, 30000);
+    }
+
+    function waitForDrain(channel, threshold, timeoutMs) {
+        return waitForChannelBufferBelow(channel, threshold, timeoutMs || 180000);
     }
 
     function waitForOpen(channel) {
@@ -93,8 +130,10 @@
     window.P2P = {
         loadConfig: loadConfig,
         createPeerConnection: createPeerConnection,
+        resolveChunkSize: resolveChunkSize,
         configureFileChannel: configureFileChannel,
         waitForBufferedAmount: waitForBufferedAmount,
+        waitForDrain: waitForDrain,
         waitForOpen: waitForOpen,
         normalizeCandidate: normalizeCandidate
     };
