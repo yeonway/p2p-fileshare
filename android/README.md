@@ -18,6 +18,13 @@ Kotlin + Jetpack Compose + Native WebRTC 기반 Android MVP입니다. 서버는 
 - Foreground Service:
   - 전송 준비/진행/검증 단계에서 알림을 표시하고 진행률을 갱신
   - 완료/실패/초기화 시 알림 종료
+- 딥링크:
+  - `sendhoney://receive?code=123456`
+  - `https://files.dcout.site/receive?code=123456`
+  - QR 또는 링크로 열면 받기 화면에 코드가 자동 입력됨
+- 백그라운드 허용:
+  - Android 13+ 알림 권한 요청
+  - 배터리 최적화 예외 요청
 - UI: 한국어, 보내기/받기/설정, 6자리 코드, 진행률, 속도, ETA, 연결 상태, 실패 사유
 
 ## 빌드

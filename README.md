@@ -22,6 +22,8 @@
 - Windows Tauri WebView sender/receiver MVP
 - Web PWA 설치 manifest/service worker
 - Android Foreground Service 전송 알림
+- 중단/타임아웃/저장 실패 공통 오류 코드
+- 송신 QR과 Android 딥링크/웹 fallback 링크
 - 기본 chunk size 1MiB
 - `sender-finished` / `receiver-complete` / `receivedBytes == file_size` 완료 조건 유지
 - SQLite에는 metadata/status/security event만 저장

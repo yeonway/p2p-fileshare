@@ -31,6 +31,12 @@ Web client는 `docs/protocol.md`를 따릅니다.
 - 전송 중에는 Wake Lock API가 가능한 환경에서 화면 잠금을 지연하고, 창 닫기/새로고침 전에 경고합니다.
 - 브라우저 정책상 창이 완전히 닫히면 WebRTC 전송을 계속할 수 없습니다.
 
+## QR / 링크
+
+- Sender는 방 생성 후 Android 앱을 여는 QR과 일반 `/receive?code=...` 웹 링크를 표시합니다.
+- Receiver는 `/receive?code=123456` 형태의 URL로 열리면 코드 입력칸을 자동으로 채우고 파일 정보를 조회합니다.
+- QR SVG는 `/api/qr/svg` POST로 즉시 생성하며, 파일 본문이나 chunk는 전송하지 않습니다.
+
 ## 제한사항
 
 - File System Access API 미지원 브라우저는 Blob fallback을 사용합니다.

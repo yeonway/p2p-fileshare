@@ -210,9 +210,52 @@ Server `transfer-completed` status is reported by the receiver after size verifi
 {
   "type": "error",
   "transfer_id": "uuid",
+  "code": "E_TRANSFER_TIMEOUT",
   "message": "reason"
 }
 ```
+
+Common error codes:
+
+- `E_SIGNALING_CLOSED`: WebSocket signaling closed during an active transfer.
+- `E_SIGNALING_ERROR`: WebSocket signaling failed.
+- `E_PEER_CONNECTION_FAILED`: WebRTC peer connection failed or closed during an active transfer.
+- `E_DATA_CHANNEL_CLOSED`: `file` DataChannel closed before expected bytes arrived.
+- `E_DATA_CHANNEL_TIMEOUT`: DataChannel send buffer/open/drain timeout.
+- `E_TRANSFER_TIMEOUT`: Receiver waited past `activeTransferIdleTimeoutSeconds` for missing bytes.
+- `E_SIZE_MISMATCH`: Reported or received byte count does not match file metadata.
+- `E_METADATA_MISMATCH`: Manifest metadata does not match the room metadata.
+- `E_STORAGE_OPEN_FAILED`: Receiver could not open the destination file.
+- `E_STORAGE_WRITE_FAILED`: Receiver could not write a chunk.
+- `E_STORAGE_CLOSE_FAILED`: Receiver could not flush/close the destination file.
+- `E_REMOTE_ERROR`: Peer sent an error without a more specific local category.
+- `E_UNKNOWN`: Fallback for unclassified failures.
+
+`transfer-failed` WebSocket status messages should include the same code:
+
+```json
+{
+  "type": "transfer-failed",
+  "error_code": "E_DATA_CHANNEL_CLOSED",
+  "reason": "reason"
+}
+```
+
+## QR And App Links
+
+Sender clients display a QR code after room creation. The QR payload is an Android intent URL that opens the Android app when installed and falls back to the HTTPS receive page:
+
+```text
+intent://receive?code=123456#Intent;scheme=sendhoney;package=site.sexyminup.p2pfileshare;S.browser_fallback_url=https%3A%2F%2Ffiles.dcout.site%2Freceive%3Fcode%3D123456;end
+```
+
+Clients also expose the plain receive URL:
+
+```text
+https://files.dcout.site/receive?code=123456
+```
+
+The Android app accepts both `sendhoney://receive?code=123456` and HTTPS `/receive?code=123456` links. Verified Android App Links require the production certificate SHA-256 fingerprints to be configured in `ANDROID_APP_SHA256_CERT_FINGERPRINTS`, served from `/.well-known/assetlinks.json`.
 
 ## Chunk And Backpressure
 
