@@ -94,7 +94,7 @@ def test_code_hash_is_stored_instead_of_plain_code(client):
     assert row["room_code_hash"] == hash_value(created["code"])
 
 
-def test_default_config_chunk_size_is_64kb(client):
+def test_default_config_chunk_size_is_1mb(client):
     response = client.get("/api/config")
     assert response.status_code == 200
-    assert response.json()["chunkSizeBytes"] == 65536
+    assert response.json()["chunkSizeBytes"] == 1048576

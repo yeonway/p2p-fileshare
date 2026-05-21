@@ -1,7 +1,7 @@
 (function () {
     "use strict";
 
-    var DEFAULT_CHUNK_SIZE = 64 * 1024;
+    var DEFAULT_CHUNK_SIZE = 1024 * 1024;
     var HIGH_WATER_BYTES = 32 * 1024 * 1024;
     var LOW_WATER_BYTES = 8 * 1024 * 1024;
 
