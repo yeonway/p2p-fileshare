@@ -84,7 +84,6 @@ interface WsMessage {
 }
 
 const DEFAULT_SERVER_URL = "https://files.dcout.site";
-const SECONDARY_SERVER_URL = "https://files.sexyminup.site";
 const LEGACY_DEFAULT_SERVER_URL = "https://files.sexyminup.site";
 const DEFAULT_CHUNK_SIZE = 64 * 1024;
 const HIGH_WATER_BYTES = 32 * 1024 * 1024;
@@ -214,7 +213,6 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="saveServerButton" class="action-button primary">${icon("save")}<span>서버 URL 저장</span></button>
         <div class="setting-note">
           <div><strong>기본값</strong><span>${DEFAULT_SERVER_URL}</span></div>
-          <div><strong>보조 예시</strong><span>${SECONDARY_SERVER_URL}</span></div>
         </div>
       </section>
 

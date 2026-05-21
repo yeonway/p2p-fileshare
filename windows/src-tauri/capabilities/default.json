@@ -9,7 +9,6 @@
       "identifier": "http:default",
       "allow": [
         { "url": "https://files.dcout.site/**" },
-        { "url": "https://files.sexyminup.site/**" },
         { "url": "http://127.0.0.1:*/*" },
         { "url": "http://localhost:*/*" }
       ]
@@ -18,7 +17,6 @@
       "identifier": "websocket:default",
       "allow": [
         { "url": "wss://files.dcout.site/ws/**" },
-        { "url": "wss://files.sexyminup.site/ws/**" },
         { "url": "ws://127.0.0.1:*/ws/**" },
         { "url": "ws://localhost:*/ws/**" }
       ]

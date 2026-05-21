@@ -45,7 +45,6 @@ npm run tauri:build
 설정 화면에서 변경할 수 있습니다.
 
 - 기본값: `https://files.dcout.site`
-- 보조 예시: `https://files.sexyminup.site`
 - 개발용 예외: `http://127.0.0.1:<port>`, `http://localhost:<port>`
 
 ## 제한사항 / Phase 2 TODO
