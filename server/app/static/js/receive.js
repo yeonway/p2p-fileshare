@@ -14,6 +14,7 @@
         writer: null,
         fallbackChunks: [],
         fallbackMode: false,
+        downloadUrl: null,
         writeQueue: Promise.resolve(),
         bytesReceived: 0,
         chunkIndex: -1,
@@ -65,23 +66,68 @@
             openWebSocket();
         } catch (error) {
             App.byId("connectButton").disabled = false;
-            setError(App.displayError(App.ErrorCodes.STORAGE_OPEN_FAILED, error.message));
+            if (isUserCancel(error)) {
+                App.setText("transferStatusText", "저장 위치 선택 취소됨");
+                setError("");
+                return;
+            }
+            setError(App.displayError(App.ErrorCodes.STORAGE_OPEN_FAILED, "저장 준비 중 문제가 발생했습니다."));
         }
     }
 
     async function prepareWriter() {
-        if ("showSaveFilePicker" in window) {
+        if (typeof window.showSaveFilePicker !== "function") {
+            enableBlobFallback();
+            return;
+        }
+
+        try {
             var handle = await window.showSaveFilePicker({
                 suggestedName: state.room.file_name
             });
-            state.writer = await handle.createWritable();
+            try {
+                state.writer = await handle.createWritable();
+            } catch (error) {
+                enableBlobFallback();
+                return;
+            }
             state.fallbackMode = false;
-            App.show("fallbackWarning", false);
-        } else {
-            state.fallbackMode = true;
             state.fallbackChunks = [];
-            App.show("fallbackWarning", true);
+            clearDownloadLink();
+            App.show("fallbackWarning", false);
+        } catch (error) {
+            if (isUserCancel(error)) {
+                throw error;
+            }
+            enableBlobFallback();
         }
+    }
+
+    function enableBlobFallback() {
+        state.writer = null;
+        state.fallbackMode = true;
+        state.fallbackChunks = [];
+        clearDownloadLink();
+        App.show("fallbackWarning", true);
+        App.setText("transferStatusText", "브라우저 다운로드 모드");
+        setError("");
+    }
+
+    function clearDownloadLink() {
+        if (state.downloadUrl) {
+            URL.revokeObjectURL(state.downloadUrl);
+            state.downloadUrl = null;
+        }
+        var link = App.byId("downloadLink");
+        link.removeAttribute("href");
+        link.removeAttribute("download");
+        App.show("downloadLink", false);
+    }
+
+    function isUserCancel(error) {
+        var name = error && error.name ? String(error.name) : "";
+        var message = error && error.message ? String(error.message).toLowerCase() : "";
+        return name === "AbortError" || message.indexOf("abort") >= 0 || message.indexOf("cancel") >= 0;
     }
 
     function openWebSocket() {
@@ -172,7 +218,7 @@
             }).then(function () {
                 return maybeFinalizeReceive();
             }).catch(function (error) {
-                failTransfer(error.message);
+                failTransfer(App.ErrorCodes.STORAGE_WRITE_FAILED, error.message || "수신 파일 처리 실패");
             });
         };
         state.fileChannel.onclose = function () {
@@ -268,7 +314,7 @@
             scheduleMissingDataTimeout();
         }
         maybeFinalizeReceive().catch(function (error) {
-            failTransfer(error.message);
+            failTransfer(App.ErrorCodes.STORAGE_CLOSE_FAILED, error.message || "수신 파일 완료 처리 실패");
         });
     }
 
@@ -291,7 +337,11 @@
         } else {
             var blob = new Blob(state.fallbackChunks, { type: state.room.mime_type || "application/octet-stream" });
             var link = App.byId("downloadLink");
-            link.href = URL.createObjectURL(blob);
+            if (state.downloadUrl) {
+                URL.revokeObjectURL(state.downloadUrl);
+            }
+            state.downloadUrl = URL.createObjectURL(blob);
+            link.href = state.downloadUrl;
             link.download = state.room.file_name;
             App.show("downloadLink", true);
         }

@@ -39,6 +39,6 @@ Web client는 `docs/protocol.md`를 따릅니다.
 
 ## 제한사항
 
-- File System Access API 미지원 브라우저는 Blob fallback을 사용합니다.
+- File System Access API 미지원 브라우저나 `createWritable()`이 차단되는 모바일 컨텍스트는 Blob fallback을 사용합니다.
 - Blob fallback은 완료 전까지 메모리에 chunk를 보관하므로 대용량 파일에 적합하지 않습니다.
 - hash 검증과 chunk 재전송은 TODO입니다.

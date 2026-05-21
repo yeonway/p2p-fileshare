@@ -119,6 +119,9 @@ const state: {
   controlChannel: RTCDataChannel | null;
   fileChannel: RTCDataChannel | null;
   writer: FileSystemWritableFileStream | null;
+  fallbackChunks: Array<ArrayBuffer>;
+  fallbackMode: boolean;
+  downloadUrl: string | null;
   writeQueue: Promise<void>;
   manifest: ManifestMessage | null;
   transferId: string | null;
@@ -146,6 +149,9 @@ const state: {
   controlChannel: null,
   fileChannel: null,
   writer: null,
+  fallbackChunks: [],
+  fallbackMode: false,
+  downloadUrl: null,
   writeQueue: Promise.resolve(),
   manifest: null,
   transferId: null,
@@ -257,6 +263,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
           <div><dt>남은 시간</dt><dd id="etaText">-</dd></div>
         </dl>
         <p id="errorText" class="error"></p>
+        <a id="downloadLink" class="action-button secondary" href="#" download hidden>${icon("download")}<span>받은 파일 저장</span></a>
         <button id="resetButton" class="action-button ghost">${icon("refresh")}<span>초기화</span></button>
       </section>
     </div>
@@ -368,7 +375,9 @@ async function prepareWriterAndConnect(): Promise<void> {
     return;
   }
   if (!window.showSaveFilePicker) {
-    setError("이 WebView는 File System Access API 저장 스트리밍을 지원하지 않습니다. Phase 2 native streaming bridge가 필요합니다.");
+    enableBlobFallback();
+    setStatus("상대 접속 대기 중");
+    await openWebSocket(state.room.room_id, "receiver");
     return;
   }
   try {
@@ -376,12 +385,33 @@ async function prepareWriterAndConnect(): Promise<void> {
       suggestedName: state.room.file_name,
       types: [{ description: "원본 파일", accept: { [state.room.mime_type || "application/octet-stream"]: [extensionOf(state.room.file_name)] } }],
     });
-    state.writer = await handle.createWritable();
-    setStatus("상대 접속 대기 중");
-    await openWebSocket(state.room.room_id, "receiver");
+    try {
+      state.writer = await handle.createWritable();
+      state.fallbackMode = false;
+      state.fallbackChunks = [];
+      clearDownloadLink();
+    } catch {
+      enableBlobFallback();
+    }
   } catch (error) {
-    failTransfer(errorMessage(error));
+    if (isUserCancel(error)) {
+      setStatus("저장 위치 선택 취소됨");
+      clearError();
+      return;
+    }
+    enableBlobFallback();
   }
+  setStatus("상대 접속 대기 중");
+  await openWebSocket(state.room.room_id, "receiver");
+}
+
+function enableBlobFallback(): void {
+  state.writer = null;
+  state.fallbackMode = true;
+  state.fallbackChunks = [];
+  clearDownloadLink();
+  setText("connectionText", "완료 후 다운로드 링크 제공");
+  clearError();
 }
 
 async function openWebSocket(roomId: string, role: Role): Promise<void> {
@@ -661,7 +691,14 @@ async function writeChunk(data: ArrayBuffer | Blob): Promise<void> {
     return;
   }
   try {
-    await state.writer?.write(view);
+    if (state.writer) {
+      await state.writer.write(view);
+    } else if (state.fallbackMode) {
+      state.fallbackChunks.push(arrayBuffer);
+    } else {
+      failTransfer(ERROR_CODES.STORAGE_OPEN_FAILED, "저장 준비가 완료되지 않았습니다.");
+      return;
+    }
   } catch (error) {
     failTransfer(ERROR_CODES.STORAGE_WRITE_FAILED, errorMessage(error));
     return;
@@ -684,13 +721,28 @@ async function maybeFinalizeReceive(): Promise<void> {
   if (state.bytesReceived !== state.manifest.file_size) return;
   clearMissingDataTimeout();
   setStatus("검증 중");
-  try {
-    await state.writer?.close();
-  } catch (error) {
-    failTransfer(ERROR_CODES.STORAGE_CLOSE_FAILED, errorMessage(error));
+  if (state.writer) {
+    try {
+      await state.writer.close();
+    } catch (error) {
+      failTransfer(ERROR_CODES.STORAGE_CLOSE_FAILED, errorMessage(error));
+      return;
+    }
+    state.writer = null;
+  } else if (state.fallbackMode) {
+    const blob = new Blob(state.fallbackChunks, { type: state.manifest.mime_type || "application/octet-stream" });
+    const link = byId<HTMLAnchorElement>("downloadLink");
+    if (state.downloadUrl) URL.revokeObjectURL(state.downloadUrl);
+    state.downloadUrl = URL.createObjectURL(blob);
+    link.href = state.downloadUrl;
+    link.download = state.manifest.file_name;
+    link.hidden = false;
+    state.fallbackChunks = [];
+    setText("connectionText", "다운로드 링크 준비됨");
+  } else {
+    failTransfer(ERROR_CODES.STORAGE_OPEN_FAILED, "저장 준비가 완료되지 않았습니다.");
     return;
   }
-  state.writer = null;
   state.completed = true;
   updateProgress(state.bytesReceived, state.manifest.file_size);
   state.controlChannel?.send(JSON.stringify({
@@ -950,6 +1002,9 @@ function resetRuntime(): void {
   state.controlChannel = null;
   state.fileChannel = null;
   state.writer = null;
+  clearDownloadLink();
+  state.fallbackChunks = [];
+  state.fallbackMode = false;
   state.writeQueue = Promise.resolve();
   state.manifest = null;
   state.transferId = null;
@@ -1023,8 +1078,25 @@ function clearError(): void {
   setText("errorText", "");
 }
 
+function clearDownloadLink(): void {
+  if (state.downloadUrl) {
+    URL.revokeObjectURL(state.downloadUrl);
+    state.downloadUrl = null;
+  }
+  const link = byId<HTMLAnchorElement>("downloadLink");
+  link.hidden = true;
+  link.removeAttribute("href");
+  link.removeAttribute("download");
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isUserCancel(error: unknown): boolean {
+  const name = error instanceof Error ? error.name : "";
+  const message = errorMessage(error).toLowerCase();
+  return name === "AbortError" || message.includes("abort") || message.includes("cancel");
 }
 
 function isTauriApp(): boolean {
