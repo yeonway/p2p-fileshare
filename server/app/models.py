@@ -59,3 +59,7 @@ class ConfigResponse(BaseModel):
     roomTtlMinutes: int
     activeTransferIdleTimeoutSeconds: int
     chunkSizeBytes: int
+
+
+class QrSvgRequest(BaseModel):
+    value: str

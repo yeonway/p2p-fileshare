@@ -15,11 +15,12 @@ class TransferUtilsTest {
     }
 
     @Test
-    fun urlValidationAllowsHttpsAndLocalHttpOnly() {
+    fun urlValidationAllowsOnlyFixedProductionDomain() {
         assertTrue(isAllowedServerUrl("https://files.dcout.site"))
-        assertTrue(isAllowedServerUrl("https://files.sexyminup.site"))
-        assertTrue(isAllowedServerUrl("http://127.0.0.1:8010"))
-        assertTrue(isAllowedServerUrl("http://localhost:8010"))
+        assertTrue(isAllowedServerUrl("https://files.dcout.site/"))
+        assertFalse(isAllowedServerUrl("https://files.sexyminup.site"))
+        assertFalse(isAllowedServerUrl("http://127.0.0.1:8010"))
+        assertFalse(isAllowedServerUrl("http://localhost:8010"))
         assertFalse(isAllowedServerUrl("http://example.com"))
     }
 

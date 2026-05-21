@@ -85,6 +85,9 @@ def _handle_status_message(room_id: str, payload: dict[str, Any]) -> None:
         )
     elif message_type == "transfer-failed":
         reason = str(payload.get("reason") or payload.get("message") or "transfer failed")
+        error_code = payload.get("error_code")
+        if isinstance(error_code, str) and error_code:
+            reason = f"[{error_code[:64]}] {reason}"
         mark_transfer_failed(room_id, reason)
     elif message_type == "connection-info":
         update_connection_info(

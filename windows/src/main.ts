@@ -67,6 +67,7 @@ interface ReceiverCompleteMessage {
 interface ErrorMessage {
   type: "error";
   transfer_id: string | null;
+  code?: string;
   message: string;
 }
 
@@ -79,6 +80,7 @@ interface WsMessage {
   total_bytes?: number;
   direct_p2p?: boolean;
   turn_used?: boolean;
+  error_code?: string;
   reason?: string;
   role?: Role;
 }
@@ -89,6 +91,21 @@ const DEFAULT_CHUNK_SIZE = 64 * 1024;
 const HIGH_WATER_BYTES = 32 * 1024 * 1024;
 const LOW_WATER_BYTES = 8 * 1024 * 1024;
 const ACK_CHUNK_INTERVAL = 64;
+const ERROR_CODES = {
+  UNKNOWN: "E_UNKNOWN",
+  SIGNALING_CLOSED: "E_SIGNALING_CLOSED",
+  SIGNALING_ERROR: "E_SIGNALING_ERROR",
+  PEER_CONNECTION_FAILED: "E_PEER_CONNECTION_FAILED",
+  DATA_CHANNEL_CLOSED: "E_DATA_CHANNEL_CLOSED",
+  DATA_CHANNEL_TIMEOUT: "E_DATA_CHANNEL_TIMEOUT",
+  TRANSFER_TIMEOUT: "E_TRANSFER_TIMEOUT",
+  SIZE_MISMATCH: "E_SIZE_MISMATCH",
+  METADATA_MISMATCH: "E_METADATA_MISMATCH",
+  STORAGE_OPEN_FAILED: "E_STORAGE_OPEN_FAILED",
+  STORAGE_WRITE_FAILED: "E_STORAGE_WRITE_FAILED",
+  STORAGE_CLOSE_FAILED: "E_STORAGE_CLOSE_FAILED",
+  REMOTE_ERROR: "E_REMOTE_ERROR",
+} as const;
 
 type IconName = "send" | "download" | "settings" | "upload" | "save" | "refresh";
 
@@ -182,6 +199,14 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <div class="code-block" id="roomCodeBlock" hidden>
           <div class="code-label">상대 입력 코드</div>
           <div class="code" id="roomCode">------</div>
+          <div class="qr-panel" id="qrPanel" hidden>
+            <div class="qr-code" id="qrCode" aria-label="앱으로 열기 QR"></div>
+            <div class="qr-copy">
+              <strong>QR로 앱 열기</strong>
+              <span>Android 앱 설치 후 QR을 찍으면 받기 화면에 코드가 자동 입력됩니다.</span>
+              <a id="shareLink" href="#" target="_blank" rel="noreferrer">웹 링크</a>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -301,11 +326,12 @@ async function createRoom(): Promise<void> {
     });
     state.transferId = crypto.randomUUID();
     setText("roomCode", state.room.code);
+    await renderShareQr(state.room.code);
     byId("roomCodeBlock").hidden = false;
     setStatus("상대 접속 대기 중");
     await openWebSocket(state.room.room_id, "sender");
   } catch (error) {
-    failTransfer(errorMessage(error));
+    failTransfer(ERROR_CODES.STORAGE_OPEN_FAILED, errorMessage(error));
   }
 }
 
@@ -403,16 +429,21 @@ async function openWebSocket(roomId: string, role: Role): Promise<void> {
     void handleWebSocketText(String(event.data), role);
   };
   socket.onclose = () => {
-    if (!state.completed && !state.failed) setText("connectionText", "signaling 종료");
+    if (!state.completed && !state.failed && hasActiveTransfer()) {
+      failTransfer(ERROR_CODES.SIGNALING_CLOSED, "signaling 연결이 전송 중 종료되었습니다.");
+    } else if (!state.completed && !state.failed) {
+      setText("connectionText", "signaling 종료");
+    }
   };
-  socket.onerror = () => failTransfer("WebSocket signaling 오류");
+  socket.onerror = () => failTransfer(ERROR_CODES.SIGNALING_ERROR, "WebSocket signaling 오류");
 }
 
 async function handleNativeWebSocketMessage(message: TauriWebSocketMessage, role: Role): Promise<void> {
   if (message.type === "Text") {
     await handleWebSocketText(message.data, role);
   } else if (message.type === "Close" && !state.completed && !state.failed) {
-    setText("connectionText", "signaling 종료");
+    if (hasActiveTransfer()) failTransfer(ERROR_CODES.SIGNALING_CLOSED, "signaling 연결이 전송 중 종료되었습니다.");
+    else setText("connectionText", "signaling 종료");
   }
 }
 
@@ -473,6 +504,8 @@ function createPeerConnection(role: Role): RTCPeerConnection {
     if (pc.connectionState === "connected") {
       setStatus("직접 연결됨");
       setTimeout(() => reportConnectionInfo(pc, role), 1200);
+    } else if ((pc.connectionState === "failed" || pc.connectionState === "closed") && hasActiveTransfer()) {
+      failTransfer(ERROR_CODES.PEER_CONNECTION_FAILED, "WebRTC 연결이 전송 중 끊어졌습니다.");
     }
   };
   return pc;
@@ -506,7 +539,10 @@ function setupControlChannel(): void {
     else if (message.type === "ack") void handleAck(message as AckMessage);
     else if (message.type === "sender-finished" || message.type === "complete") handleSenderFinished(message as SenderFinishedMessage);
     else if (message.type === "receiver-complete") handleReceiverComplete(message as ReceiverCompleteMessage);
-    else if (message.type === "error") failTransfer((message as ErrorMessage).message || "peer 오류");
+    else if (message.type === "error") {
+      const error = message as ErrorMessage;
+      failTransfer(error.code || ERROR_CODES.REMOTE_ERROR, error.message || "peer 오류");
+    }
   };
 }
 
@@ -515,14 +551,21 @@ function setupFileChannel(channel: RTCDataChannel): void {
   channel.onmessage = (event) => {
     state.writeQueue = state.writeQueue
       .then(() => writeChunk(event.data))
-      .catch((error: unknown) => failTransfer(errorMessage(error)));
+      .catch((error: unknown) => failTransfer(ERROR_CODES.STORAGE_WRITE_FAILED, errorMessage(error)));
+  };
+  channel.onclose = () => {
+    const expected = state.manifest?.file_size || 0;
+    if (!state.completed && !state.failed && state.bytesReceived < expected) {
+      if (state.receiverSenderFinished) scheduleMissingDataTimeout();
+      else failTransfer(ERROR_CODES.DATA_CHANNEL_CLOSED, sizeFailureMessage(expected, state.bytesReceived));
+    }
   };
 }
 
 function handleManifest(manifest: ManifestMessage): void {
   if (!state.room || !("file_size" in state.room)) return;
   if (manifest.file_size !== state.room.file_size) {
-    failTransfer("파일 크기 metadata가 일치하지 않습니다.");
+    failTransfer(ERROR_CODES.METADATA_MISMATCH, "파일 크기 metadata가 일치하지 않습니다.");
     return;
   }
   state.manifest = manifest;
@@ -539,7 +582,11 @@ async function handleAck(message: AckMessage): Promise<void> {
   state.ackedBytes = Math.max(state.ackedBytes, message.received_bytes || 0);
   updateProgress(state.ackedBytes, state.file?.size || 0);
   if (message.received_bytes === 0 && !state.sendingStarted) {
-    await sendFileChunks();
+    try {
+      await sendFileChunks();
+    } catch (error) {
+      failTransfer(ERROR_CODES.DATA_CHANNEL_TIMEOUT, errorMessage(error));
+    }
   } else if (state.senderFinished && !state.completed) {
     setStatus("수신 완료 확인 대기 중");
   }
@@ -549,7 +596,7 @@ function handleSenderFinished(message: SenderFinishedMessage): void {
   state.receiverSenderFinished = true;
   const expected = state.manifest?.file_size || 0;
   if (message.total_bytes !== expected) {
-    failTransfer("송신자가 보고한 전체 크기가 원본 파일 크기와 일치하지 않습니다.");
+    failTransfer(ERROR_CODES.SIZE_MISMATCH, "송신자가 보고한 전체 크기가 원본 파일 크기와 일치하지 않습니다.");
     return;
   }
   if (state.bytesReceived < expected) {
@@ -561,7 +608,7 @@ function handleSenderFinished(message: SenderFinishedMessage): void {
 
 function handleReceiverComplete(message: ReceiverCompleteMessage): void {
   if (!state.file || message.total_bytes !== state.file.size) {
-    failTransfer("수신 완료 크기가 원본과 일치하지 않습니다.");
+    failTransfer(ERROR_CODES.SIZE_MISMATCH, "수신 완료 크기가 원본과 일치하지 않습니다.");
     return;
   }
   state.completed = true;
@@ -581,6 +628,7 @@ async function sendFileChunks(): Promise<void> {
   const chunkSize = resolveChunkSize();
   for (let offset = 0; offset < state.file.size; offset += chunkSize) {
     await waitForSendBuffer(state.fileChannel, chunkSize, 30000);
+    if (state.fileChannel.readyState !== "open") throw new Error("file DataChannel이 전송 중 닫혔습니다.");
     const chunk = await state.file.slice(offset, Math.min(offset + chunkSize, state.file.size)).arrayBuffer();
     state.fileChannel.send(chunk);
     state.bytesSent += chunk.byteLength;
@@ -609,10 +657,15 @@ async function writeChunk(data: ArrayBuffer | Blob): Promise<void> {
   const view = new Uint8Array(arrayBuffer);
   const expected = state.manifest.file_size;
   if (state.bytesReceived + view.byteLength > expected) {
-    failTransfer(sizeFailureMessage(expected, state.bytesReceived + view.byteLength));
+    failTransfer(ERROR_CODES.SIZE_MISMATCH, sizeFailureMessage(expected, state.bytesReceived + view.byteLength));
     return;
   }
-  await state.writer?.write(view);
+  try {
+    await state.writer?.write(view);
+  } catch (error) {
+    failTransfer(ERROR_CODES.STORAGE_WRITE_FAILED, errorMessage(error));
+    return;
+  }
   state.bytesReceived += view.byteLength;
   state.chunkIndex += 1;
   updateProgress(state.bytesReceived, expected);
@@ -631,7 +684,12 @@ async function maybeFinalizeReceive(): Promise<void> {
   if (state.bytesReceived !== state.manifest.file_size) return;
   clearMissingDataTimeout();
   setStatus("검증 중");
-  await state.writer?.close();
+  try {
+    await state.writer?.close();
+  } catch (error) {
+    failTransfer(ERROR_CODES.STORAGE_CLOSE_FAILED, errorMessage(error));
+    return;
+  }
   state.writer = null;
   state.completed = true;
   updateProgress(state.bytesReceived, state.manifest.file_size);
@@ -761,6 +819,38 @@ async function apiJson<T>(path: string, options?: RequestInit): Promise<T> {
   return data as T;
 }
 
+async function apiText(path: string, options?: RequestInit): Promise<string> {
+  const fetchImpl = isTauriApp() ? tauriFetch : fetch;
+  const response = await fetchImpl(state.serverUrl.replace(/\/$/, "") + path, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(text || `HTTP ${response.status}`);
+  return text;
+}
+
+async function renderShareQr(code: string): Promise<void> {
+  const shareUrl = receiveUrl(code);
+  const qrPayload = androidIntentUrl(code, shareUrl);
+  const link = byId<HTMLAnchorElement>("shareLink");
+  link.href = shareUrl;
+  link.textContent = shareUrl;
+  byId("qrCode").innerHTML = await apiText("/api/qr/svg", {
+    method: "POST",
+    body: JSON.stringify({ value: qrPayload }),
+  });
+  byId("qrPanel").hidden = false;
+}
+
+function receiveUrl(code: string): string {
+  return `${state.serverUrl.replace(/\/$/, "")}/receive?code=${encodeURIComponent(code)}`;
+}
+
+function androidIntentUrl(code: string, fallbackUrl: string): string {
+  return `intent://receive?code=${encodeURIComponent(code)}#Intent;scheme=sendhoney;package=site.sexyminup.p2pfileshare;S.browser_fallback_url=${encodeURIComponent(fallbackUrl)};end`;
+}
+
 function webSocketUrl(roomId: string, role: Role): string {
   const clean = state.serverUrl.replace(/\/$/, "");
   const base = clean.startsWith("https://")
@@ -773,6 +863,10 @@ function sendWs(payload: WsMessage): void {
   if (state.ws?.isOpen()) {
     void state.ws.send(JSON.stringify(payload));
   }
+}
+
+function hasActiveTransfer(): boolean {
+  return state.sendingStarted || Boolean(state.manifest) || state.bytesReceived > 0 || state.ackedBytes > 0;
 }
 
 function saveServerUrl(): void {
@@ -797,7 +891,7 @@ function scheduleMissingDataTimeout(): void {
   state.missingDataTimer = window.setTimeout(() => {
     const expected = state.manifest?.file_size || 0;
     if (!state.completed && state.bytesReceived < expected) {
-      failTransfer(sizeFailureMessage(expected, state.bytesReceived));
+      failTransfer(ERROR_CODES.TRANSFER_TIMEOUT, sizeFailureMessage(expected, state.bytesReceived));
     }
   }, activeTimeoutMs());
 }
@@ -813,16 +907,20 @@ function activeTimeoutMs(): number {
   return Math.max(1, state.config?.activeTransferIdleTimeoutSeconds || 180) * 1000;
 }
 
-function failTransfer(message: string): void {
+function failTransfer(code: string, message?: string): void {
+  if (message === undefined) {
+    message = code;
+    code = ERROR_CODES.UNKNOWN;
+  }
   if (state.completed || state.failed) return;
   state.failed = true;
   clearMissingDataTimeout();
-  state.controlChannel?.send(JSON.stringify({ type: "error", transfer_id: state.transferId || state.manifest?.transfer_id || null, message } satisfies ErrorMessage));
-  sendWs({ type: "transfer-failed", reason: message });
+  state.controlChannel?.send(JSON.stringify({ type: "error", transfer_id: state.transferId || state.manifest?.transfer_id || null, code, message } satisfies ErrorMessage));
+  sendWs({ type: "transfer-failed", error_code: code, reason: message });
   void state.writer?.close().catch(() => undefined);
   state.writer = null;
   setStatus("실패");
-  setError(message);
+  setError(`[${code}] ${message}`);
 }
 
 function resetTransfer(): void {
@@ -835,6 +933,8 @@ function resetTransfer(): void {
   setText("pathText", "대기 중");
   setText("roomCode", "------");
   byId("roomCodeBlock").hidden = true;
+  byId("qrPanel").hidden = true;
+  byId("qrCode").innerHTML = "";
   clearReceiveFileUi();
   syncSendFileUi();
   updateProgress(0, 0);

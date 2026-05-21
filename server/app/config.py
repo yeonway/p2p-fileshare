@@ -75,6 +75,7 @@ class Settings:
     webrtc_turn_urls: list[str]
     webrtc_turn_username: str
     webrtc_turn_credential: str
+    android_app_sha256_cert_fingerprints: list[str]
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -99,6 +100,7 @@ class Settings:
             webrtc_turn_urls=_split_csv(os.getenv("WEBRTC_TURN_URLS", "")),
             webrtc_turn_username=os.getenv("WEBRTC_TURN_USERNAME", ""),
             webrtc_turn_credential=os.getenv("WEBRTC_TURN_CREDENTIAL", ""),
+            android_app_sha256_cert_fingerprints=_split_csv(os.getenv("ANDROID_APP_SHA256_CERT_FINGERPRINTS", "")),
         )
 
     @property

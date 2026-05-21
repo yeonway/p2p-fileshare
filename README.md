@@ -20,6 +20,8 @@
 - Web sender/receiver MVP
 - Android sender/receiver MVP
 - Windows Tauri WebView sender/receiver MVP
+- Web PWA 설치 manifest/service worker
+- Android Foreground Service 전송 알림
 - 기본 chunk size 1MiB
 - `sender-finished` / `receiver-complete` / `receivedBytes == file_size` 완료 조건 유지
 - SQLite에는 metadata/status/security event만 저장
@@ -139,7 +141,7 @@ pytest
 
 ## 미완성/제한사항
 
-- Android Foreground Service 전송은 Phase 2 TODO입니다.
+- WebRTC 전송은 Web PWA 창이나 브라우저 탭이 열려 있어야 유지됩니다.
 - Windows Rust native streaming bridge는 Phase 2 TODO입니다.
 - Windows MVP는 WebView File API 기반이며 `showSaveFilePicker()` 미지원 환경에서는 수신 저장을 진행하지 않습니다.
 - hash 검증은 TODO입니다. MVP는 `receivedBytes == file_size`를 필수 검증으로 사용합니다.

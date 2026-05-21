@@ -10,6 +10,8 @@ data class TransferUiState(
     val selectedFileMimeType: String = "application/octet-stream",
     val receiveMimeType: String = "application/octet-stream",
     val roomCode: String? = null,
+    val shareUrl: String? = null,
+    val qrPayload: String? = null,
     val expiresAt: String? = null,
     val codeInput: String = "",
     val status: String = "대기 중",
@@ -20,5 +22,6 @@ data class TransferUiState(
     val speedBytesPerSecond: Double = 0.0,
     val etaSeconds: Double = Double.NaN,
     val error: String? = null,
+    val errorCode: String? = null,
     val pendingSaveFileName: String? = null,
 )

@@ -61,10 +61,11 @@
         App.byId("connectButton").disabled = true;
         try {
             await prepareWriter();
+            App.startTransferKeepAlive("파일 수신 연결이 열려 있습니다.");
             openWebSocket();
         } catch (error) {
             App.byId("connectButton").disabled = false;
-            setError(error.message);
+            setError(App.displayError(App.ErrorCodes.STORAGE_OPEN_FAILED, error.message));
         }
     }
 
@@ -96,6 +97,14 @@
             } else if (message.type === "ice-candidate" && state.pc) {
                 await state.pc.addIceCandidate(P2P.normalizeCandidate(message.candidate));
             }
+        };
+        state.ws.onclose = function () {
+            if (!state.completed && (state.bytesReceived > 0 || state.senderFinished)) {
+                failTransfer(App.ErrorCodes.SIGNALING_CLOSED, "signaling 연결이 수신 중 종료되었습니다.");
+            }
+        };
+        state.ws.onerror = function () {
+            failTransfer(App.ErrorCodes.SIGNALING_ERROR, "WebSocket signaling 오류");
         };
     }
 
@@ -131,7 +140,7 @@
             } else if (message.type === "sender-finished" || message.type === "complete") {
                 handleSenderFinished(message);
             } else if (message.type === "error") {
-                failTransfer(message.message || "송신자 오류");
+                failTransfer(message.code || App.ErrorCodes.REMOTE_ERROR, message.message || "송신자 오류");
             }
         };
     }
@@ -139,7 +148,7 @@
     function handleManifest(manifest) {
         state.manifest = manifest;
         if (manifest.file_size !== state.room.file_size) {
-            failTransfer("파일 크기 metadata가 일치하지 않습니다.");
+            failTransfer(App.ErrorCodes.METADATA_MISMATCH, "파일 크기 metadata가 일치하지 않습니다.");
             return;
         }
         state.bytesReceived = 0;
@@ -167,9 +176,13 @@
             });
         };
         state.fileChannel.onclose = function () {
-            if (!state.completed && state.senderFinished && state.bytesReceived < expectedSize()) {
-                App.setText("transferStatusText", "남은 데이터 대기 중");
-                scheduleMissingDataTimeout();
+            if (!state.completed && !state.failed && state.bytesReceived < expectedSize()) {
+                if (state.senderFinished) {
+                    App.setText("transferStatusText", "남은 데이터 대기 중");
+                    scheduleMissingDataTimeout();
+                } else {
+                    failTransfer(App.ErrorCodes.DATA_CHANNEL_CLOSED, sizeFailureMessage(expectedSize(), state.bytesReceived));
+                }
             }
         };
     }
@@ -182,12 +195,18 @@
         var view = new Uint8Array(arrayBuffer);
         var expected = expectedSize();
         if (state.bytesReceived + view.byteLength > expected) {
-            throw new Error(sizeFailureMessage(expected, state.bytesReceived + view.byteLength));
+            failTransfer(App.ErrorCodes.SIZE_MISMATCH, sizeFailureMessage(expected, state.bytesReceived + view.byteLength));
+            return;
         }
-        if (state.writer) {
-            await state.writer.write(view);
-        } else {
-            state.fallbackChunks.push(arrayBuffer);
+        try {
+            if (state.writer) {
+                await state.writer.write(view);
+            } else {
+                state.fallbackChunks.push(arrayBuffer);
+            }
+        } catch (error) {
+            failTransfer(App.ErrorCodes.STORAGE_WRITE_FAILED, error.message || "저장 파일 쓰기 실패");
+            return;
         }
         state.bytesReceived += view.byteLength;
         state.chunkIndex += 1;
@@ -241,7 +260,7 @@
     function handleSenderFinished(message) {
         state.senderFinished = true;
         if (typeof message.total_bytes === "number" && message.total_bytes !== expectedSize()) {
-            failTransfer("송신자가 보고한 전체 크기가 원본 파일 크기와 일치하지 않습니다.");
+            failTransfer(App.ErrorCodes.SIZE_MISMATCH, "송신자가 보고한 전체 크기가 원본 파일 크기와 일치하지 않습니다.");
             return;
         }
         if (state.bytesReceived < expectedSize()) {
@@ -263,7 +282,12 @@
         clearMissingDataTimeout();
         state.finalizing = true;
         if (state.writer) {
-            await state.writer.close();
+            try {
+                await state.writer.close();
+            } catch (error) {
+                failTransfer(App.ErrorCodes.STORAGE_CLOSE_FAILED, error.message || "저장 파일 닫기 실패");
+                return;
+            }
         } else {
             var blob = new Blob(state.fallbackChunks, { type: state.room.mime_type || "application/octet-stream" });
             var link = App.byId("downloadLink");
@@ -287,6 +311,7 @@
             direct_p2p: App.byId("pathStatusText").textContent !== "TURN relay",
             turn_used: App.byId("pathStatusText").textContent === "TURN relay"
         });
+        App.stopTransferKeepAlive();
     }
 
     function clearMissingDataTimeout() {
@@ -300,7 +325,7 @@
         clearMissingDataTimeout();
         state.missingDataTimer = window.setTimeout(function () {
             if (!state.completed && state.bytesReceived < expectedSize()) {
-                failTransfer(sizeFailureMessage(expectedSize(), state.bytesReceived));
+                failTransfer(App.ErrorCodes.TRANSFER_TIMEOUT, sizeFailureMessage(expectedSize(), state.bytesReceived));
             }
         }, (state.config.activeTransferIdleTimeoutSeconds || 180) * 1000);
     }
@@ -311,7 +336,11 @@
             expected + ", received size: " + received + ", missing bytes: " + missing;
     }
 
-    function failTransfer(message) {
+    function failTransfer(code, message) {
+        if (message === undefined) {
+            message = code;
+            code = App.ErrorCodes.UNKNOWN;
+        }
         if (state.completed || state.failed) {
             return;
         }
@@ -321,16 +350,23 @@
             state.controlChannel.send(JSON.stringify({
                 type: "error",
                 transfer_id: state.manifest ? state.manifest.transfer_id : null,
+                code: code,
                 message: message
             }));
         }
         App.setText("transferStatusText", "실패");
-        setError(message);
-        App.sendWs(state.ws, { type: "transfer-failed", reason: message });
+        setError(App.displayError(code, message));
+        App.sendWs(state.ws, { type: "transfer-failed", error_code: code, reason: message });
+        App.stopTransferKeepAlive();
     }
 
     document.addEventListener("DOMContentLoaded", function () {
         App.byId("lookupButton").addEventListener("click", lookupRoom);
         App.byId("connectButton").addEventListener("click", prepareAndConnect);
+        var code = App.queryCode().replace(/\D/g, "").slice(0, 6);
+        if (code.length === 6) {
+            App.byId("codeInput").value = code;
+            lookupRoom();
+        }
     });
 }());

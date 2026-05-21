@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+import segno
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -14,6 +16,7 @@ from .admin import router as admin_router
 from .cleanup import cleanup_loop
 from .config import get_settings
 from .db import init_db
+from .models import QrSvgRequest
 from .rooms import router as rooms_router
 from .signaling import router as signaling_router
 
@@ -77,6 +80,54 @@ async def generic_exception_handler(request: Request, exc: Exception):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def web_manifest():
+    return FileResponse(APP_ROOT / "static" / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/sw.js", include_in_schema=False)
+def service_worker():
+    return FileResponse(
+        APP_ROOT / "static" / "sw.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/"},
+    )
+
+
+@app.get("/.well-known/assetlinks.json", include_in_schema=False)
+def android_asset_links():
+    fingerprints = get_settings().android_app_sha256_cert_fingerprints
+    if not fingerprints:
+        return JSONResponse(content=[])
+    return JSONResponse(
+        content=[
+            {
+                "relation": ["delegate_permission/common.handle_all_urls"],
+                "target": {
+                    "namespace": "android_app",
+                    "package_name": "site.sexyminup.p2pfileshare",
+                    "sha256_cert_fingerprints": fingerprints,
+                },
+            },
+        ],
+    )
+
+
+@app.post("/api/qr/svg", include_in_schema=False)
+def qr_svg(payload: QrSvgRequest):
+    value = payload.value.strip()
+    if not value or len(value) > 2048:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid QR value")
+    out = io.BytesIO()
+    qr = segno.make(value, error="m")
+    qr.save(out, kind="svg", scale=5, border=2, xmldecl=False, svgns=True)
+    return Response(
+        content=out.getvalue().decode("utf-8"),
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/", response_class=HTMLResponse)

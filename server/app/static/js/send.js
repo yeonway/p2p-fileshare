@@ -58,7 +58,9 @@
             App.setText("roomCode", state.room.code);
             App.setText("fileNameText", state.file.name);
             App.setText("fileSizeText", App.formatBytes(state.file.size));
+            await renderShareQr(state.room.code);
             App.show("transferPanel", true);
+            App.startTransferKeepAlive("파일 전송 방이 열려 있습니다.");
             updateTtl();
             state.ttlTimer = window.setInterval(updateTtl, 1000);
             openWebSocket();
@@ -86,8 +88,24 @@
             }
         };
         state.ws.onclose = function () {
-            App.setText("receiverStatusText", "signaling 종료");
+            if (!state.receiverComplete && state.sendingStarted) {
+                failTransfer(App.ErrorCodes.SIGNALING_CLOSED, "signaling 연결이 전송 중 종료되었습니다.");
+            } else {
+                App.setText("receiverStatusText", "signaling 종료");
+            }
         };
+    }
+
+    async function renderShareQr(code) {
+        var receiveUrl = App.buildReceiveUrl(code);
+        var intentUrl = App.buildAndroidIntentUrl(code);
+        var link = App.byId("shareLink");
+        if (link) {
+            link.href = receiveUrl;
+            link.textContent = receiveUrl;
+        }
+        await App.renderQrCode("qrCode", intentUrl);
+        App.show("qrPanel", true);
     }
 
     async function createOffer() {
@@ -136,13 +154,13 @@
                     try {
                         await sendFileChunks();
                     } catch (error) {
-                        failTransfer(error.message);
+                        failTransfer(App.ErrorCodes.DATA_CHANNEL_TIMEOUT, error.message);
                     }
                 }
             } else if (message.type === "receiver-complete" || message.type === "complete") {
                 handleReceiverComplete(message);
             } else if (message.type === "error") {
-                failTransfer(message.message || "수신자 오류");
+                failTransfer(message.code || App.ErrorCodes.REMOTE_ERROR, message.message || "수신자 오류");
             }
         };
     }
@@ -160,18 +178,24 @@
 
     function handleReceiverComplete(message) {
         if (message.total_bytes !== state.file.size) {
-            failTransfer("수신 완료 크기가 원본과 일치하지 않습니다.");
+            failTransfer(App.ErrorCodes.SIZE_MISMATCH, "수신 완료 크기가 원본과 일치하지 않습니다.");
             return;
         }
         state.receiverComplete = true;
         App.setText("transferStatusText", "완료");
         App.updateProgress(state.file.size, state.file.size, state.startedAt);
+        App.stopTransferKeepAlive();
     }
 
-    function failTransfer(message) {
+    function failTransfer(code, message) {
+        if (message === undefined) {
+            message = code;
+            code = App.ErrorCodes.UNKNOWN;
+        }
         App.setText("transferStatusText", "실패");
-        setError(message);
-        App.sendWs(state.ws, { type: "transfer-failed", reason: message });
+        setError(App.displayError(code, message));
+        App.sendWs(state.ws, { type: "transfer-failed", error_code: code, reason: message });
+        App.stopTransferKeepAlive();
     }
 
     async function sendFileChunks() {
@@ -189,6 +213,9 @@
         for (var offset = 0; offset < state.file.size; offset += chunkSize) {
             var chunk = await state.file.slice(offset, Math.min(offset + chunkSize, state.file.size)).arrayBuffer();
             await P2P.waitForBufferedAmount(state.fileChannel, chunkSize);
+            if (state.fileChannel.readyState !== "open") {
+                throw new Error("file DataChannel이 전송 중 닫혔습니다.");
+            }
             state.fileChannel.send(chunk);
             state.bytesSent += chunk.byteLength;
             state.chunksSent += 1;

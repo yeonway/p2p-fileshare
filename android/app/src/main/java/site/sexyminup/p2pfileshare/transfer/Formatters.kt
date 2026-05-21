@@ -35,9 +35,7 @@ fun formatEta(seconds: Double): String {
 }
 
 fun isAllowedServerUrl(value: String): Boolean {
-    val clean = value.trim()
-    if (clean.startsWith("https://") && clean.length > "https://".length) return true
-    return clean.startsWith("http://127.0.0.1") || clean.startsWith("http://localhost")
+    return value.trim().trimEnd('/') == "https://files.dcout.site"
 }
 
 fun chunkCount(fileSize: Long, chunkSize: Int): Long {

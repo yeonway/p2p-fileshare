@@ -78,6 +78,7 @@ data class WsMessage(
     @SerialName("total_bytes") val totalBytes: Long? = null,
     @SerialName("direct_p2p") val directP2p: Boolean? = null,
     @SerialName("turn_used") val turnUsed: Boolean? = null,
+    @SerialName("error_code") val errorCode: String? = null,
     val reason: String? = null,
 )
 

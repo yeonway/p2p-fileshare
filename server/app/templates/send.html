@@ -3,7 +3,12 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#145A64">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>파일 보내기 - send honey where</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/static/img/pwa-icon-192.png">
     <link rel="stylesheet" href="/static/css/style.css?v=send-honey-where">
 </head>
 <body class="app-page">
@@ -14,6 +19,7 @@
         </a>
         <nav class="nav-links" aria-label="주요 이동">
             <a href="/receive">받기</a>
+            <button id="installAppButton" class="nav-install hidden" type="button">앱 설치</button>
         </nav>
     </header>
 
@@ -55,6 +61,14 @@
                 <div>
                     <span class="label">새 접속 가능 시간</span>
                     <strong id="ttlText">--:--</strong>
+                </div>
+            </div>
+            <div id="qrPanel" class="qr-panel hidden">
+                <div id="qrCode" class="qr-code" aria-label="앱으로 열기 QR"></div>
+                <div class="qr-copy">
+                    <strong>QR로 앱 열기</strong>
+                    <span>상대가 Android 앱 설치 후 QR을 찍으면 받기 화면에 코드가 자동 입력됩니다.</span>
+                    <a id="shareLink" href="#" target="_blank" rel="noreferrer">웹으로 받기 링크 열기</a>
                 </div>
             </div>
 

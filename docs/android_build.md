@@ -32,6 +32,6 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 ## Known Limits
 
-- MVP는 Foreground Service를 완성하지 않았습니다.
-- 백그라운드 전송은 Android 정책에 따라 끊길 수 있습니다.
+- 전송 중에는 Foreground Service 알림으로 진행률을 갱신해 앱이 홈 화면이나 잠금 화면 뒤에 있어도 전송이 유지되도록 합니다.
+- 사용자가 앱을 강제 종료하거나 시스템이 프로세스를 종료하면 진행 중인 WebRTC 전송은 복구되지 않습니다.
 - hash 검증과 missing chunk 재요청은 TODO입니다.

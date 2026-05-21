@@ -1,0 +1,42 @@
+{
+  "name": "send honey where",
+  "short_name": "send honey",
+  "description": "Private peer-to-peer file transfer",
+  "id": "/",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "browser"],
+  "background_color": "#fbf6eb",
+  "theme_color": "#145A64",
+  "orientation": "any",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    {
+      "src": "/static/img/pwa-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/img/pwa-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "파일 보내기",
+      "short_name": "보내기",
+      "url": "/send",
+      "icons": [{ "src": "/static/img/pwa-icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "파일 받기",
+      "short_name": "받기",
+      "url": "/receive",
+      "icons": [{ "src": "/static/img/pwa-icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

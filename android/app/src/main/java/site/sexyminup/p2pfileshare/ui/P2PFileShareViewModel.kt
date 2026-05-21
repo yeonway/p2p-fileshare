@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import org.webrtc.DataChannel
+import site.sexyminup.p2pfileshare.P2PTransferForegroundService
 import site.sexyminup.p2pfileshare.data.ApiClient
 import site.sexyminup.p2pfileshare.data.ConfigResponse
 import site.sexyminup.p2pfileshare.data.RoomCreateResponse
@@ -27,22 +28,24 @@ import site.sexyminup.p2pfileshare.signaling.SignalingClient
 import site.sexyminup.p2pfileshare.signaling.WsMessage
 import site.sexyminup.p2pfileshare.transfer.AckMessage
 import site.sexyminup.p2pfileshare.transfer.ErrorMessage
+import site.sexyminup.p2pfileshare.transfer.FileMetadata
 import site.sexyminup.p2pfileshare.transfer.ManifestMessage
 import site.sexyminup.p2pfileshare.transfer.ReceiverCompleteMessage
 import site.sexyminup.p2pfileshare.transfer.SenderFinishedMessage
+import site.sexyminup.p2pfileshare.transfer.TransferErrorCodes
 import site.sexyminup.p2pfileshare.transfer.chunkCount
 import site.sexyminup.p2pfileshare.transfer.encodeAck
 import site.sexyminup.p2pfileshare.transfer.encodeError
 import site.sexyminup.p2pfileshare.transfer.encodeManifest
 import site.sexyminup.p2pfileshare.transfer.encodeReceiverComplete
 import site.sexyminup.p2pfileshare.transfer.encodeSenderFinished
-import site.sexyminup.p2pfileshare.transfer.isAllowedServerUrl
 import site.sexyminup.p2pfileshare.transfer.messageType
 import site.sexyminup.p2pfileshare.transfer.queryFileMetadata
 import site.sexyminup.p2pfileshare.transfer.resolveDataChannelChunkSize
 import site.sexyminup.p2pfileshare.webrtc.WebRtcManager
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.URLEncoder
 import java.nio.ByteBuffer
 import java.util.UUID
 import kotlin.math.max
@@ -66,7 +69,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     private var webRtcManager: WebRtcManager? = null
     private var controlChannel: DataChannel? = null
     private var fileChannel: DataChannel? = null
-    private var sendFile: site.sexyminup.p2pfileshare.transfer.FileMetadata? = null
+    private var sendFile: FileMetadata? = null
     private var transferId: String? = null
     private var sendingStarted = false
     private var senderFinished = false
@@ -85,29 +88,37 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     private var lastProgressAt = 0L
     private var transferStartedAt = 0L
     private var timeoutJob: Job? = null
+    private var foregroundActive = false
     private val receiveMutex = Mutex()
 
     init {
         viewModelScope.launch {
-            settingsRepository.serverUrl.collect { savedUrl ->
-                _uiState.update { it.copy(serverUrl = savedUrl, editableServerUrl = savedUrl) }
+            settingsRepository.serverUrl.collect { fixedUrl ->
+                _uiState.update { it.copy(serverUrl = fixedUrl, editableServerUrl = fixedUrl) }
             }
         }
     }
 
     fun updateServerUrl(url: String) {
-        _uiState.update { it.copy(editableServerUrl = url) }
+        _uiState.update {
+            it.copy(
+                serverUrl = SettingsRepository.DEFAULT_SERVER_URL,
+                editableServerUrl = SettingsRepository.DEFAULT_SERVER_URL,
+            )
+        }
     }
 
     fun saveServerUrl() {
-        val url = uiState.value.editableServerUrl.trim().trimEnd('/')
-        if (!isAllowedServerUrl(url)) {
-            setError("서버 URL은 https:// 를 권장하며 개발용 http://127.0.0.1 또는 localhost만 허용합니다.")
-            return
-        }
         viewModelScope.launch {
-            settingsRepository.saveServerUrl(url)
-            _uiState.update { it.copy(serverUrl = url, editableServerUrl = url, error = null, status = "설정 저장됨") }
+            settingsRepository.saveServerUrl()
+            _uiState.update {
+                it.copy(
+                    serverUrl = SettingsRepository.DEFAULT_SERVER_URL,
+                    editableServerUrl = SettingsRepository.DEFAULT_SERVER_URL,
+                    error = null,
+                    status = "고정 서버 적용됨",
+                )
+            }
         }
     }
 
@@ -121,6 +132,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                         selectedFileSize = file.size,
                         selectedFileMimeType = file.mimeType,
                         totalBytes = file.size,
+                        progressBytes = 0L,
                         error = null,
                         status = "파일 선택됨",
                     )
@@ -131,6 +143,21 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
 
     fun updateCode(code: String) {
         _uiState.update { it.copy(codeInput = code.filter(Char::isDigit).take(6)) }
+    }
+
+    fun applyReceiveCode(code: String) {
+        val normalized = code.filter(Char::isDigit).take(6)
+        if (normalized.length == 6) {
+            _uiState.update {
+                it.copy(
+                    codeInput = normalized,
+                    roomCode = null,
+                    error = null,
+                    errorCode = null,
+                    status = "QR 코드 입력됨",
+                )
+            }
+        }
     }
 
     fun createSendRoom() {
@@ -145,18 +172,21 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                 val serverUrl = uiState.value.serverUrl
                 val loadedConfig = apiClient.getConfig(serverUrl)
                 config = loadedConfig
-                _uiState.update { it.copy(status = "방 생성 중") }
+                setStatus("방 생성 중")
                 val created = apiClient.createRoom(serverUrl, file.name, file.size, file.mimeType)
                 room = created
                 transferId = UUID.randomUUID().toString()
                 _uiState.update {
+                    val shareUrl = buildReceiveUrl(serverUrl, created.code)
                     it.copy(
                         roomCode = created.code,
+                        shareUrl = shareUrl,
+                        qrPayload = buildAndroidIntentUrl(created.code, shareUrl),
                         expiresAt = created.expiresAt,
-                        status = "상대 접속 대기 중",
                         totalBytes = file.size,
                     )
                 }
+                setStatus("상대 접속 대기 중")
                 connectSignaling(created.roomId, "sender")
             }.onFailure { failTransfer(it.message ?: "방 생성 실패") }
         }
@@ -187,6 +217,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                         totalBytes = joined.fileSize,
                     )
                 }
+                updateForeground()
             }.onFailure { failTransfer(it.message ?: "방 참가 실패") }
         }
     }
@@ -210,9 +241,9 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                 outputStream = withContext(Dispatchers.IO) {
                     contentResolver.openOutputStream(uri, "w")
                 } ?: error("저장 파일을 열 수 없습니다.")
-                _uiState.update { it.copy(status = "상대 접속 대기 중", error = null) }
+                setStatus("상대 접속 대기 중")
                 connectSignaling(joined.roomId, "receiver")
-            }.onFailure { failTransfer(it.message ?: "수신 준비 실패") }
+            }.onFailure { failTransfer(it.message ?: "수신 준비 실패", TransferErrorCodes.STORAGE_OPEN_FAILED) }
         }
     }
 
@@ -224,10 +255,11 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         outputStream = null
         controlChannel = null
         fileChannel = null
+        stopForeground()
         _uiState.update {
             TransferUiState(
-                serverUrl = it.serverUrl,
-                editableServerUrl = it.editableServerUrl,
+                serverUrl = SettingsRepository.DEFAULT_SERVER_URL,
+                editableServerUrl = SettingsRepository.DEFAULT_SERVER_URL,
                 codeInput = it.codeInput,
             )
         }
@@ -240,12 +272,16 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
             role = role,
             onOpen = {
                 signalingClient.send(WsMessage(type = if (role == "sender") "sender-ready" else "receiver-ready"))
-                _uiState.update { it.copy(status = if (role == "sender") "코드 대기 중" else "WebRTC 연결 중") }
+                setStatus(if (role == "sender") "코드 대기 중" else "WebRTC 연결 중")
             },
             onClosed = {
-                if (!completed && !failed) _uiState.update { it.copy(connectionState = "signaling 종료") }
+                if (!completed && !failed && hasActiveTransfer()) {
+                    failTransfer("signaling 연결이 전송 중 종료되었습니다.", TransferErrorCodes.SIGNALING_CLOSED)
+                } else if (!completed && !failed) {
+                    _uiState.update { it.copy(connectionState = "signaling 종료") }
+                }
             },
-            onFailure = { failTransfer(it.message ?: "signaling 오류") },
+            onFailure = { failTransfer(it.message ?: "signaling 오류", TransferErrorCodes.SIGNALING_ERROR) },
             onMessage = { message -> handleSignalingMessage(role, message) },
         )
     }
@@ -261,7 +297,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                     }
                     "ice-candidate" -> message.candidate?.let { webRtcManager?.addIceCandidate(it) }
                 }
-            }.onFailure { failTransfer(it.message ?: "signaling 처리 실패") }
+            }.onFailure { failTransfer(it.message ?: "signaling 처리 실패", TransferErrorCodes.SIGNALING_ERROR) }
         }
     }
 
@@ -271,7 +307,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         manager.createPeerConnection(loadedConfig)
         controlChannel = manager.createDataChannel("control").also(::registerControlChannel)
         fileChannel = manager.createDataChannel("file").also(::registerFileChannel)
-        _uiState.update { it.copy(status = "WebRTC 연결 중") }
+        setStatus("WebRTC 연결 중")
         val offer = manager.createOffer()
         signalingClient.send(WsMessage(type = "offer", sdp = offer))
     }
@@ -291,7 +327,10 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
             onIceCandidate = { signalingClient.send(WsMessage(type = "ice-candidate", candidate = it)) },
             onConnectionState = { state ->
                 _uiState.update { it.copy(connectionState = state, status = state.toKoreanConnectionStatus()) }
-                if (state == "CONNECTED" || state == "COMPLETED") {
+                updateForeground()
+                if (state == "FAILED" || state == "CLOSED") {
+                    failTransfer("WebRTC 연결이 전송 중 끊어졌습니다.", TransferErrorCodes.PEER_CONNECTION_FAILED)
+                } else if (state == "CONNECTED" || state == "COMPLETED") {
                     _uiState.update { it.copy(pathStatus = "직접/TURN 확인 중") }
                     webRtcManager?.reportConnectionPath { direct, turn ->
                         _uiState.update {
@@ -349,7 +388,11 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         channel.registerObserver(
             object : DataChannel.Observer {
                 override fun onBufferedAmountChange(previousAmount: Long) = Unit
-                override fun onStateChange() = Unit
+                override fun onStateChange() {
+                    if (channel.state() == DataChannel.State.CLOSED) {
+                        handleFileChannelClosed()
+                    }
+                }
                 override fun onMessage(buffer: DataChannel.Buffer) {
                     if (!buffer.binary) return
                     val data = ByteArray(buffer.data.remaining())
@@ -383,16 +426,18 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                     "ack" -> handleAck(json.decodeFromString<AckMessage>(text))
                     "sender-finished", "complete" -> handleSenderFinished(json.decodeFromString<SenderFinishedMessage>(text))
                     "receiver-complete" -> handleReceiverComplete(json.decodeFromString<ReceiverCompleteMessage>(text))
-                    "error" -> failTransfer(json.decodeFromString<ErrorMessage>(text).message)
+                    "error" -> json.decodeFromString<ErrorMessage>(text).let {
+                        failTransfer(it.message, it.code.ifBlank { TransferErrorCodes.REMOTE_ERROR })
+                    }
                 }
-            }.onFailure { failTransfer(it.message ?: "control 메시지 처리 실패") }
+            }.onFailure { failTransfer(it.message ?: "control 메시지 처리 실패", TransferErrorCodes.UNKNOWN) }
         }
     }
 
     private suspend fun handleManifest(message: ManifestMessage) {
         val joined = receiveRoom ?: return
         if (message.fileSize != joined.fileSize) {
-            failTransfer("파일 크기 metadata가 일치하지 않습니다.")
+            failTransfer("파일 크기 metadata가 일치하지 않습니다.", TransferErrorCodes.METADATA_MISMATCH)
             return
         }
         manifest = message
@@ -401,6 +446,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         receiverSenderFinished = false
         transferStartedAt = System.nanoTime()
         _uiState.update { it.copy(status = "전송 중", totalBytes = message.fileSize, progressBytes = 0L) }
+        updateForeground()
         signalingClient.send(WsMessage(type = "transfer-started"))
         sendAck(initial = true)
     }
@@ -409,9 +455,10 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         ackedBytes = max(ackedBytes, message.receivedBytes)
         updateProgress(ackedBytes, sendFile?.size ?: 0L)
         if (message.receivedBytes == 0L && !sendingStarted) {
-            sendFileChunks()
+            runCatching { sendFileChunks() }
+                .onFailure { failTransfer(it.message ?: "DataChannel 전송 실패", TransferErrorCodes.DATA_CHANNEL_TIMEOUT) }
         } else if (senderFinished && !receiverComplete) {
-            _uiState.update { it.copy(status = "수신 완료 확인 대기 중") }
+            setStatus("수신 완료 확인 대기 중")
         }
     }
 
@@ -419,11 +466,11 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         receiverSenderFinished = true
         val expected = manifest?.fileSize ?: receiveRoom?.fileSize ?: 0L
         if (message.totalBytes != expected) {
-            failTransfer("송신자가 보고한 전체 크기가 원본 파일 크기와 일치하지 않습니다.")
+            failTransfer("송신자가 보고한 전체 크기가 원본 파일 크기와 일치하지 않습니다.", TransferErrorCodes.SIZE_MISMATCH)
             return
         }
         if (bytesReceived < expected) {
-            _uiState.update { it.copy(status = "남은 데이터 대기 중") }
+            setStatus("남은 데이터 대기 중")
             scheduleMissingDataTimeout()
         }
         viewModelScope.launch { maybeFinalizeReceive() }
@@ -432,13 +479,14 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     private fun handleReceiverComplete(message: ReceiverCompleteMessage) {
         val file = sendFile ?: return
         if (message.totalBytes != file.size) {
-            failTransfer("수신 완료 크기가 원본과 일치하지 않습니다.")
+            failTransfer("수신 완료 크기가 원본과 일치하지 않습니다.", TransferErrorCodes.SIZE_MISMATCH)
             return
         }
         receiverComplete = true
         completed = true
         updateProgress(file.size, file.size)
-        _uiState.update { it.copy(status = "완료", error = null) }
+        setStatus("완료")
+        stopForeground()
     }
 
     private suspend fun sendFileChunks() {
@@ -450,6 +498,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         chunksSent = 0L
         ackedBytes = 0L
         _uiState.update { it.copy(status = "전송 중", progressBytes = 0L, totalBytes = file.size) }
+        updateForeground()
         signalingClient.send(WsMessage(type = "transfer-started"))
         waitForDataChannelOpen(fileChannel)
         val chunkSize = resolveChunkSize()
@@ -459,7 +508,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                 readAndSend(input, fileChannel, chunkSize)
             }
         }
-        _uiState.update { it.copy(status = "전송 버퍼 비우는 중") }
+        setStatus("전송 버퍼 비우는 중")
         waitForDrain(fileChannel, lowWaterBytes(chunkSize), timeoutMs = activeTimeoutMs())
         senderFinished = true
         controlChannel?.sendText(
@@ -471,7 +520,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                 ),
             ),
         )
-        _uiState.update { it.copy(status = "수신 완료 확인 대기 중") }
+        setStatus("수신 완료 확인 대기 중")
     }
 
     private suspend fun readAndSend(input: InputStream, channel: DataChannel, chunkSize: Int) {
@@ -497,11 +546,16 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
             if (completed || failed) return
             val expected = manifest?.fileSize ?: return
             if (bytesReceived + data.size > expected) {
-                failTransfer(sizeFailureMessage(expected, bytesReceived + data.size))
+                failTransfer(sizeFailureMessage(expected, bytesReceived + data.size), TransferErrorCodes.SIZE_MISMATCH)
                 return
             }
-            withContext(Dispatchers.IO) {
-                outputStream?.write(data) ?: error("저장 파일이 열려 있지 않습니다.")
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    outputStream?.write(data) ?: error("저장 파일이 열려 있지 않습니다.")
+                }
+            }.onFailure {
+                failTransfer(it.message ?: "저장 파일 쓰기 실패", TransferErrorCodes.STORAGE_WRITE_FAILED)
+                return
             }
             bytesReceived += data.size
             chunkIndex += 1
@@ -524,10 +578,15 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         val currentManifest = manifest ?: return
         if (bytesReceived != currentManifest.fileSize) return
         timeoutJob?.cancel()
-        _uiState.update { it.copy(status = "검증 중") }
-        withContext(Dispatchers.IO) {
-            outputStream?.flush()
-            outputStream?.close()
+        setStatus("검증 중")
+        runCatching {
+            withContext(Dispatchers.IO) {
+                outputStream?.flush()
+                outputStream?.close()
+            }
+        }.onFailure {
+            failTransfer(it.message ?: "저장 파일 닫기 실패", TransferErrorCodes.STORAGE_CLOSE_FAILED)
+            return
         }
         outputStream = null
         completed = true
@@ -549,7 +608,8 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                 turnUsed = uiState.value.pathStatus == "TURN 중계 가능성 있음",
             ),
         )
-        _uiState.update { it.copy(status = "완료", error = null) }
+        setStatus("완료")
+        stopForeground()
     }
 
     private fun sendPeriodicAck() {
@@ -579,24 +639,42 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
             delay(activeTimeoutMs())
             val expected = manifest?.fileSize ?: return@launch
             if (!completed && bytesReceived < expected) {
-                failTransfer(sizeFailureMessage(expected, bytesReceived))
+                failTransfer(sizeFailureMessage(expected, bytesReceived), TransferErrorCodes.TRANSFER_TIMEOUT)
             }
         }
     }
 
-    private fun failTransfer(message: String) {
+    private fun handleFileChannelClosed() {
+        if (completed || failed) return
+        val expected = manifest?.fileSize ?: sendFile?.size ?: return
+        val current = if (manifest != null) bytesReceived else ackedBytes
+        if (current >= expected) return
+        if (receiverSenderFinished) {
+            setStatus("남은 데이터 대기 중")
+            scheduleMissingDataTimeout()
+        } else {
+            failTransfer(sizeFailureMessage(expected, current), TransferErrorCodes.DATA_CHANNEL_CLOSED)
+        }
+    }
+
+    private fun hasActiveTransfer(): Boolean =
+        sendingStarted || manifest != null || bytesReceived > 0L || ackedBytes > 0L
+
+    private fun failTransfer(message: String, code: String = TransferErrorCodes.UNKNOWN) {
         if (completed || failed) return
         failed = true
         timeoutJob?.cancel()
-        controlChannel?.sendText(json.encodeError(ErrorMessage(transferId = transferId ?: manifest?.transferId, message = message)))
-        signalingClient.send(WsMessage(type = "transfer-failed", reason = message))
+        controlChannel?.sendText(json.encodeError(ErrorMessage(transferId = transferId ?: manifest?.transferId, code = code, message = message)))
+        signalingClient.send(WsMessage(type = "transfer-failed", errorCode = code, reason = message))
         outputStream?.closeQuietly()
         outputStream = null
-        _uiState.update { it.copy(status = "실패", error = message) }
+        _uiState.update { it.copy(status = "실패", error = message, errorCode = code) }
+        updateForeground()
+        stopForeground()
     }
 
     private fun setError(message: String) {
-        _uiState.update { it.copy(error = message) }
+        _uiState.update { it.copy(error = message, errorCode = null) }
     }
 
     private fun startFreshTransfer(status: String) {
@@ -622,15 +700,25 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
             it.copy(
                 status = status,
                 error = null,
+                errorCode = null,
                 progressBytes = 0L,
                 speedBytesPerSecond = 0.0,
                 etaSeconds = Double.NaN,
                 roomCode = null,
+                shareUrl = null,
+                qrPayload = null,
                 expiresAt = null,
                 pathStatus = "대기 중",
                 connectionState = "대기 중",
             )
         }
+        foregroundActive = true
+        P2PTransferForegroundService.start(getApplication(), status)
+    }
+
+    private fun setStatus(status: String) {
+        _uiState.update { it.copy(status = status) }
+        updateForeground()
     }
 
     private fun updateProgress(bytes: Long, total: Long) {
@@ -649,6 +737,32 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                 etaSeconds = eta,
             )
         }
+        updateForeground()
+    }
+
+    private fun updateForeground() {
+        if (!foregroundActive) return
+        val state = uiState.value
+        P2PTransferForegroundService.update(
+            context = getApplication(),
+            status = state.status,
+            progressBytes = state.progressBytes,
+            totalBytes = state.totalBytes,
+        )
+    }
+
+    private fun stopForeground() {
+        if (!foregroundActive) return
+        foregroundActive = false
+        P2PTransferForegroundService.stop(getApplication())
+    }
+
+    private fun buildReceiveUrl(serverUrl: String, code: String): String =
+        "${serverUrl.trimEnd('/')}/receive?code=$code"
+
+    private fun buildAndroidIntentUrl(code: String, fallbackUrl: String): String {
+        val fallback = URLEncoder.encode(fallbackUrl, "UTF-8")
+        return "intent://receive?code=$code#Intent;scheme=sendhoney;package=site.sexyminup.p2pfileshare;S.browser_fallback_url=$fallback;end"
     }
 
     private fun resolveChunkSize(): Int = resolveDataChannelChunkSize(config?.chunkSizeBytes)
@@ -689,9 +803,8 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun String.toKoreanConnectionStatus(): String = when (this) {
-        "NEW" -> "WebRTC 연결 중"
-        "CHECKING" -> "WebRTC 연결 중"
-        "CONNECTED", "COMPLETED" -> "직접 연결됨"
+        "NEW", "CHECKING" -> "WebRTC 연결 중"
+        "CONNECTED", "COMPLETED" -> "연결됨"
         "FAILED" -> "실패"
         "DISCONNECTED", "CLOSED" -> "연결 종료"
         else -> this

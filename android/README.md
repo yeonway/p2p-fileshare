@@ -15,6 +15,9 @@ Kotlin + Jetpack Compose + Native WebRTC 기반 Android MVP입니다. 서버는 
   - sender는 `receiver-complete` 전까지 완료 처리하지 않음
   - receiver는 `receivedBytes == manifest.file_size`이고 writer close 완료 후 `receiver-complete` 전송
   - `sender-finished`는 수신 완료 신호로 처리하지 않음
+- Foreground Service:
+  - 전송 준비/진행/검증 단계에서 알림을 표시하고 진행률을 갱신
+  - 완료/실패/초기화 시 알림 종료
 - UI: 한국어, 보내기/받기/설정, 6자리 코드, 진행률, 속도, ETA, 연결 상태, 실패 사유
 
 ## 빌드
@@ -43,7 +46,7 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 ## 제한사항 / TODO
 
-- Foreground Service 전송은 Phase 2 TODO입니다. MVP에서는 앱이 백그라운드로 내려가면 Android 정책에 따라 전송이 끊길 수 있음을 UI에 안내합니다.
+- 사용자가 앱을 강제 종료하거나 시스템이 프로세스를 종료하면 진행 중인 WebRTC 전송은 복구되지 않습니다.
 - hash 검증은 TODO입니다. 현재 MVP 검증은 `receivedBytes == file_size`입니다.
 - `request-missing` chunk 재전송은 protocol slot만 유지하고 구현하지 않았습니다.
 - direct/TURN 표시는 WebRTC stats 기반 best-effort입니다.

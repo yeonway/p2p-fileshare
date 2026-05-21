@@ -7,6 +7,8 @@
 - `server/app/templates/index.html`
 - `server/app/templates/send.html`
 - `server/app/templates/receive.html`
+- `server/app/static/manifest.webmanifest`
+- `server/app/static/sw.js`
 - `server/app/static/js/common.js`
 - `server/app/static/js/webrtc_protocol.js`
 - `server/app/static/js/send.js`
@@ -22,6 +24,12 @@ Web client는 `docs/protocol.md`를 따릅니다.
 - 파일 bytes는 `RTCDataChannel` `file` channel로만 전송합니다.
 - Sender는 `File.slice()`로 chunk를 읽습니다.
 - Receiver는 가능한 경우 File System Access API로 chunk를 즉시 저장합니다.
+
+## 설치형 웹앱
+
+- Web client는 PWA manifest와 service worker를 제공해 브라우저에서 설치할 수 있습니다.
+- 전송 중에는 Wake Lock API가 가능한 환경에서 화면 잠금을 지연하고, 창 닫기/새로고침 전에 경고합니다.
+- 브라우저 정책상 창이 완전히 닫히면 WebRTC 전송을 계속할 수 없습니다.
 
 ## 제한사항
 

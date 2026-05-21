@@ -98,3 +98,37 @@ def test_default_config_chunk_size_is_1mb(client):
     response = client.get("/api/config")
     assert response.status_code == 200
     assert response.json()["chunkSizeBytes"] == 1048576
+
+
+def test_pwa_assets_are_served(client):
+    manifest = client.get("/manifest.webmanifest")
+    assert manifest.status_code == 200
+    assert manifest.headers["content-type"].startswith("application/manifest+json")
+    assert manifest.json()["display"] == "standalone"
+
+    service_worker = client.get("/sw.js")
+    assert service_worker.status_code == 200
+    assert service_worker.headers["service-worker-allowed"] == "/"
+
+
+def test_qr_svg_endpoint_generates_svg_without_get_query(client):
+    response = client.post("/api/qr/svg", json={"value": "sendhoney://receive?code=123456"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.text.startswith("<svg")
+
+
+def test_qr_svg_endpoint_rejects_empty_or_large_values(client):
+    assert client.post("/api/qr/svg", json={"value": ""}).status_code == 422
+    assert client.post("/api/qr/svg", json={"value": "x" * 2049}).status_code == 422
+
+
+def test_android_asset_links_uses_configured_fingerprints(client, monkeypatch):
+    fingerprint = "AA:BB:CC"
+    monkeypatch.setenv("ANDROID_APP_SHA256_CERT_FINGERPRINTS", fingerprint)
+    response = client.get("/.well-known/assetlinks.json")
+    assert response.status_code == 200
+    body = response.json()
+    assert body[0]["target"]["package_name"] == "site.sexyminup.p2pfileshare"
+    assert body[0]["target"]["sha256_cert_fingerprints"] == [fingerprint]

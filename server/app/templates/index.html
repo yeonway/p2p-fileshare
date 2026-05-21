@@ -3,7 +3,12 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#145A64">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>send honey where</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/static/img/pwa-icon-192.png">
     <link rel="stylesheet" href="/static/css/style.css?v=send-honey-where">
 </head>
 <body class="landing-page">
@@ -15,6 +20,7 @@
         <nav class="nav-links" aria-label="주요 이동">
             <a href="/send">보내기</a>
             <a href="/receive">받기</a>
+            <button id="installAppButton" class="nav-install hidden" type="button">앱 설치</button>
         </nav>
     </header>
 
@@ -52,5 +58,6 @@
             </div>
         </section>
     </main>
+    <script src="/static/js/common.js"></script>
 </body>
 </html>

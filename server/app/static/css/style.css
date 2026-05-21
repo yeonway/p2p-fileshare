@@ -124,7 +124,8 @@ a {
     flex-wrap: wrap;
 }
 
-.nav-links a {
+.nav-links a,
+.nav-install {
     min-height: 40px;
     display: inline-flex;
     align-items: center;
@@ -138,7 +139,14 @@ a {
     backdrop-filter: blur(12px);
 }
 
-.app-page .nav-links a {
+.nav-install {
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.app-page .nav-links a,
+.app-page .nav-install {
     border-color: rgba(104, 71, 20, 0.16);
     background: rgba(255, 255, 255, 0.74);
 }
@@ -446,6 +454,56 @@ input[type="file"]::file-selector-button {
     margin-bottom: 20px;
 }
 
+.qr-panel {
+    display: grid;
+    grid-template-columns: 144px minmax(0, 1fr);
+    gap: 16px;
+    align-items: center;
+    margin: 0 0 22px;
+    border: 1px solid rgba(15, 118, 110, 0.18);
+    border-radius: 8px;
+    padding: 14px;
+    background: rgba(232, 246, 243, 0.72);
+}
+
+.qr-code {
+    width: 144px;
+    height: 144px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(15, 118, 110, 0.18);
+    border-radius: 8px;
+    padding: 8px;
+    background: #fff;
+}
+
+.qr-code svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.qr-copy {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+}
+
+.qr-copy strong {
+    font-size: 18px;
+}
+
+.qr-copy span {
+    color: var(--muted);
+    font-weight: 700;
+}
+
+.qr-copy a {
+    color: var(--teal);
+    font-weight: 900;
+    overflow-wrap: anywhere;
+}
+
 .code {
     display: block;
     color: var(--honey-deep);
@@ -593,6 +651,17 @@ th {
 
     .panel {
         padding: 20px;
+    }
+
+    .qr-panel {
+        grid-template-columns: 1fr;
+    }
+
+    .qr-code {
+        width: min(100%, 220px);
+        height: auto;
+        aspect-ratio: 1;
+        justify-self: center;
     }
 
     .code {

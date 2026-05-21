@@ -47,8 +47,25 @@ data class ReceiverCompleteMessage(
 data class ErrorMessage(
     val type: String = "error",
     @SerialName("transfer_id") val transferId: String? = null,
+    val code: String = TransferErrorCodes.UNKNOWN,
     val message: String,
 )
+
+object TransferErrorCodes {
+    const val UNKNOWN = "E_UNKNOWN"
+    const val SIGNALING_CLOSED = "E_SIGNALING_CLOSED"
+    const val SIGNALING_ERROR = "E_SIGNALING_ERROR"
+    const val PEER_CONNECTION_FAILED = "E_PEER_CONNECTION_FAILED"
+    const val DATA_CHANNEL_CLOSED = "E_DATA_CHANNEL_CLOSED"
+    const val DATA_CHANNEL_TIMEOUT = "E_DATA_CHANNEL_TIMEOUT"
+    const val TRANSFER_TIMEOUT = "E_TRANSFER_TIMEOUT"
+    const val SIZE_MISMATCH = "E_SIZE_MISMATCH"
+    const val METADATA_MISMATCH = "E_METADATA_MISMATCH"
+    const val STORAGE_OPEN_FAILED = "E_STORAGE_OPEN_FAILED"
+    const val STORAGE_WRITE_FAILED = "E_STORAGE_WRITE_FAILED"
+    const val STORAGE_CLOSE_FAILED = "E_STORAGE_CLOSE_FAILED"
+    const val REMOTE_ERROR = "E_REMOTE_ERROR"
+}
 
 fun Json.messageType(text: String): String {
     return decodeFromString<JsonObject>(text)["type"]?.jsonPrimitive?.content.orEmpty()

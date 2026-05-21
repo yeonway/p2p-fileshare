@@ -331,6 +331,49 @@ dd {
   line-height: 1;
 }
 
+.qr-panel {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  margin-top: 16px;
+  text-align: left;
+}
+
+.qr-code {
+  width: 128px;
+  height: 128px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #dce4e7;
+  border-radius: 8px;
+  padding: 7px;
+  background: #ffffff;
+}
+
+.qr-code svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.qr-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.qr-copy span {
+  color: #5d6b70;
+  line-height: 1.45;
+}
+
+.qr-copy a {
+  color: #146c75;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
 .setting-note {
   display: grid;
   gap: 8px;
@@ -445,6 +488,15 @@ progress::-moz-progress-bar {
 
   .code-entry {
     grid-template-columns: 1fr;
+  }
+
+  .qr-panel {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+
+  .qr-code {
+    justify-self: center;
   }
 
   .meta div {
