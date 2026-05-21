@@ -1,9 +1,9 @@
 (function () {
     "use strict";
 
-    var DEFAULT_CHUNK_SIZE = 65536;
-    var HIGH_WATER_FACTOR = 16;
-    var LOW_WATER_FACTOR = 4;
+    var DEFAULT_CHUNK_SIZE = 1024 * 1024;
+    var HIGH_WATER_BYTES = 32 * 1024 * 1024;
+    var LOW_WATER_BYTES = 8 * 1024 * 1024;
 
     async function loadConfig() {
         return App.apiJson("/api/config");
@@ -37,8 +37,16 @@
     }
 
     function configureFileChannel(channel, chunkSize) {
+        var thresholds = bufferThresholds(chunkSize);
         channel.binaryType = "arraybuffer";
-        channel.bufferedAmountLowThreshold = Math.max(1024, chunkSize * LOW_WATER_FACTOR);
+        channel.bufferedAmountLowThreshold = thresholds.low;
+    }
+
+    function bufferThresholds(chunkSize) {
+        var normalizedChunkSize = Math.max(1, Number(chunkSize) || DEFAULT_CHUNK_SIZE);
+        var low = Math.max(normalizedChunkSize * 4, LOW_WATER_BYTES);
+        var high = Math.max(low + normalizedChunkSize, HIGH_WATER_BYTES);
+        return { low: low, high: high };
     }
 
     function waitForChannelBufferBelow(channel, threshold, timeoutMs) {
@@ -48,33 +56,61 @@
         return new Promise(function (resolve, reject) {
             var settled = false;
             var startedAt = Date.now();
-            var interval = window.setInterval(function () {
+            var interval = null;
+
+            function cleanup() {
+                if (interval) {
+                    window.clearInterval(interval);
+                }
+                if (channel.removeEventListener) {
+                    channel.removeEventListener("bufferedamountlow", check);
+                }
+            }
+
+            function finish(error) {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                cleanup();
+                if (error) {
+                    reject(error);
+                } else {
+                    resolve();
+                }
+            }
+
+            function check() {
                 if (settled) {
                     return;
                 }
                 if (channel.readyState === "closed") {
-                    settled = true;
-                    window.clearInterval(interval);
-                    reject(new Error("DataChannel closed before buffered data drained"));
+                    finish(new Error("DataChannel closed before buffered data drained"));
                     return;
                 }
                 if (channel.bufferedAmount <= threshold) {
-                    settled = true;
-                    window.clearInterval(interval);
-                    resolve();
+                    finish();
                     return;
                 }
                 if (timeoutMs && Date.now() - startedAt > timeoutMs) {
-                    settled = true;
-                    window.clearInterval(interval);
-                    reject(new Error("DataChannel bufferedAmount drain timeout"));
+                    finish(new Error("DataChannel bufferedAmount drain timeout"));
                 }
-            }, 50);
+            }
+
+            if (channel.addEventListener) {
+                channel.addEventListener("bufferedamountlow", check);
+            }
+            interval = window.setInterval(check, 50);
+            check();
         });
     }
 
     function waitForBufferedAmount(channel, chunkSize) {
-        return waitForChannelBufferBelow(channel, chunkSize * HIGH_WATER_FACTOR, 30000);
+        var thresholds = bufferThresholds(chunkSize);
+        if (channel.bufferedAmount <= thresholds.high) {
+            return Promise.resolve();
+        }
+        return waitForChannelBufferBelow(channel, thresholds.low, 30000);
     }
 
     function waitForDrain(channel, threshold, timeoutMs) {

@@ -3,18 +3,35 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>파일 받기 - Raspberry Pi P2P File Share</title>
+    <title>파일 받기 - send honey where</title>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body>
-    <main class="shell">
-        <nav class="topbar">
-            <a href="/">P2P File Share</a>
-            <a href="/send">파일 보내기</a>
+<body class="app-page">
+    <header class="site-nav">
+        <a class="brand" href="/" aria-label="send honey where 홈">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <span class="brand-text">send honey where</span>
+        </a>
+        <nav class="nav-links" aria-label="주요 이동">
+            <a href="/send">보내기</a>
         </nav>
+    </header>
+
+    <main class="shell app-shell">
+        <section class="page-heading">
+            <p class="eyebrow">Receive</p>
+            <h1>파일 받기</h1>
+            <p class="muted">전달받은 6자리 코드로 파일 정보를 확인하고 저장 위치를 선택하세요.</p>
+        </section>
 
         <section class="panel">
-            <h1>파일 받기</h1>
+            <div class="panel-heading">
+                <div>
+                    <span class="label">Step 1</span>
+                    <h2>코드 입력</h2>
+                </div>
+                <span class="panel-badge">Secure</span>
+            </div>
             <p class="muted">파일은 서버를 거치지 않고 WebRTC DataChannel로 전송됩니다.</p>
 
             <div class="field code-input">
@@ -23,8 +40,14 @@
             </div>
 
             <div class="actions">
-                <button id="lookupButton" class="button primary" type="button">파일 정보 확인</button>
-                <button id="connectButton" class="button hidden" type="button">저장 위치 선택 및 연결</button>
+                <button id="lookupButton" class="button primary" type="button">
+                    <span class="button-icon" aria-hidden="true">↵</span>
+                    파일 정보 확인
+                </button>
+                <button id="connectButton" class="button hidden" type="button">
+                    <span class="button-icon" aria-hidden="true">↓</span>
+                    저장 위치 선택 및 연결
+                </button>
             </div>
             <p id="errorText" class="error" role="alert"></p>
             <p id="fallbackWarning" class="warning hidden">이 브라우저는 저장 위치 선택 API를 지원하지 않아 완료 전까지 메모리에 보관합니다. 대용량 파일은 브라우저/기기 상태에 따라 중단될 수 있습니다.</p>

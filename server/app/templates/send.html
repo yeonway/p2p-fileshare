@@ -3,18 +3,35 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>파일 보내기 - Raspberry Pi P2P File Share</title>
+    <title>파일 보내기 - send honey where</title>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body>
-    <main class="shell">
-        <nav class="topbar">
-            <a href="/">P2P File Share</a>
-            <a href="/receive">파일 받기</a>
+<body class="app-page">
+    <header class="site-nav">
+        <a class="brand" href="/" aria-label="send honey where 홈">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <span class="brand-text">send honey where</span>
+        </a>
+        <nav class="nav-links" aria-label="주요 이동">
+            <a href="/receive">받기</a>
         </nav>
+    </header>
+
+    <main class="shell app-shell">
+        <section class="page-heading">
+            <p class="eyebrow">Send</p>
+            <h1>파일 보내기</h1>
+            <p class="muted">6자리 코드를 만들고 받는 사람에게 공유하세요. 파일 본문은 WebRTC DataChannel로만 이동합니다.</p>
+        </section>
 
         <section class="panel">
-            <h1>파일 보내기</h1>
+            <div class="panel-heading">
+                <div>
+                    <span class="label">Step 1</span>
+                    <h2>전송할 파일 선택</h2>
+                </div>
+                <span class="panel-badge">P2P</span>
+            </div>
             <p class="muted">코드는 30분 동안 새 접속에만 유효합니다. 전송이 시작되면 완료될 때까지 유지됩니다.</p>
 
             <div class="field">
@@ -22,7 +39,10 @@
                 <input id="fileInput" type="file">
             </div>
 
-            <button id="createRoomButton" class="button primary" type="button">6자리 코드 생성</button>
+            <button id="createRoomButton" class="button primary" type="button">
+                <span class="button-icon" aria-hidden="true">+</span>
+                6자리 코드 생성
+            </button>
             <p id="errorText" class="error" role="alert"></p>
         </section>
 

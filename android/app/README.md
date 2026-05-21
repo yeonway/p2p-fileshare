@@ -1,7 +1,24 @@
-# Android App Placeholder
+# Android App Module
 
-이 디렉터리는 후속 Android 구현을 위한 자리입니다.
+`site.sexyminup.p2pfileshare` Android app module입니다.
 
-1차 MVP에서는 서버/Web 동작과 공통 protocol 확정이 목표이므로 Android Native 코드는 포함하지 않습니다.
+주요 코드 위치:
 
-후속 구현은 `../README.md`와 `../../docs/protocol.md`를 기준으로 진행합니다.
+- `data/`: REST API, 설정 저장
+- `signaling/`: OkHttp WebSocket signaling
+- `webrtc/`: Native WebRTC `PeerConnection` / `DataChannel`
+- `transfer/`: protocol message, SAF file metadata, formatting
+- `ui/`: Compose UI와 전송 상태 ViewModel
+
+빌드:
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug
+```
+
+APK:
+
+```text
+android/app/build/outputs/apk/debug/app-debug.apk
+```

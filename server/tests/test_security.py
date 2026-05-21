@@ -75,13 +75,21 @@ def test_websocket_forbidden_message_type_is_rejected(client):
 
 
 def test_public_origins_split_strip_and_allow_multiple(monkeypatch):
-    monkeypatch.setenv("PUBLIC_ORIGINS", " https://files.sexyminup.site, https://files.dcout.site/ ")
+    monkeypatch.setenv("PUBLIC_ORIGINS", " https://files.dcout.site, https://files.sexyminup.site/ ")
     monkeypatch.delenv("PUBLIC_ORIGIN", raising=False)
     settings = Settings.from_env()
-    assert settings.public_origins == ["https://files.sexyminup.site", "https://files.dcout.site"]
-    assert "https://files.sexyminup.site" in settings.allowed_origins
+    assert settings.public_origins == ["https://files.dcout.site", "https://files.sexyminup.site"]
     assert "https://files.dcout.site" in settings.allowed_origins
+    assert "https://files.sexyminup.site" in settings.allowed_origins
     assert is_allowed_origin("https://files.dcout.site/", settings)
+
+
+def test_default_public_origin_is_dcout(monkeypatch):
+    monkeypatch.delenv("PUBLIC_ORIGINS", raising=False)
+    monkeypatch.delenv("PUBLIC_ORIGIN", raising=False)
+    settings = Settings.from_env()
+    assert settings.public_origins == ["https://files.dcout.site"]
+    assert is_allowed_origin("https://files.dcout.site", settings)
 
 
 def test_public_origin_backward_compatibility(monkeypatch):

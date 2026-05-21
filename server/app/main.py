@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
 
 
 settings = get_settings()
-app = FastAPI(title="Raspberry Pi P2P File Share", lifespan=lifespan)
+app = FastAPI(title="send honey where", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,

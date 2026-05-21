@@ -1,7 +1,7 @@
 (function () {
     "use strict";
 
-    var ACK_CHUNK_INTERVAL = 16;
+    var ACK_CHUNK_INTERVAL = 64;
 
     var state = {
         config: null,

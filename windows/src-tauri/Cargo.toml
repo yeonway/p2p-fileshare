@@ -1,0 +1,18 @@
+[package]
+name = "p2p-fileshare-windows"
+version = "0.1.0"
+description = "P2P file share Windows WebView MVP"
+authors = ["P2P File Share"]
+edition = "2021"
+
+[lib]
+name = "p2p_fileshare_windows_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
