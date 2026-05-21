@@ -27,7 +27,7 @@ This protocol is shared by the Web, Android, and Windows clients.
   ],
   "roomTtlMinutes": 30,
   "activeTransferIdleTimeoutSeconds": 180,
-  "chunkSizeBytes": 1048576
+  "chunkSizeBytes": 65536
 }
 ```
 
@@ -140,7 +140,7 @@ Sender sends this on the `control` channel before file chunks.
   "file_name": "video.mp4",
   "file_size": 123456789,
   "mime_type": "video/mp4",
-  "chunk_size": 1048576,
+  "chunk_size": 65536,
   "chunk_count": 118,
   "hash_algorithm": null
 }
@@ -259,7 +259,7 @@ The Android app accepts both `sendhoney://receive?code=123456` and HTTPS `/recei
 
 ## Chunk And Backpressure
 
-- Default chunk size is `1048576` bytes.
+- Default chunk size is `65536` bytes. Web, Windows, and Android clients also cap outgoing DataChannel chunks to this safe size for large transfers.
 - Sender never loads the full file into memory.
 - Web sender reads chunks with `File.slice()`.
 - Receiver writes each chunk immediately when File System Access API is available.

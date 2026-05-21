@@ -1,9 +1,10 @@
 (function () {
     "use strict";
 
-    var DEFAULT_CHUNK_SIZE = 1024 * 1024;
-    var HIGH_WATER_BYTES = 32 * 1024 * 1024;
-    var LOW_WATER_BYTES = 8 * 1024 * 1024;
+    var DEFAULT_CHUNK_SIZE = 64 * 1024;
+    var MAX_SAFE_CHUNK_SIZE = 64 * 1024;
+    var HIGH_WATER_BYTES = 4 * 1024 * 1024;
+    var LOW_WATER_BYTES = 1024 * 1024;
 
     async function loadConfig() {
         return App.apiJson("/api/config");
@@ -31,9 +32,9 @@
         var configured = Number(config && config.chunkSizeBytes) || DEFAULT_CHUNK_SIZE;
         var maxMessageSize = pc && pc.sctp ? Number(pc.sctp.maxMessageSize) : 0;
         if (Number.isFinite(maxMessageSize) && maxMessageSize > 0 && configured > maxMessageSize) {
-            return Math.max(1, Math.floor(maxMessageSize));
+            configured = Math.max(1, Math.floor(maxMessageSize));
         }
-        return configured;
+        return Math.max(1, Math.min(configured, MAX_SAFE_CHUNK_SIZE));
     }
 
     function configureFileChannel(channel, chunkSize) {
@@ -110,11 +111,52 @@
         if (channel.bufferedAmount <= thresholds.high) {
             return Promise.resolve();
         }
-        return waitForChannelBufferBelow(channel, thresholds.low, 30000);
+        return waitForChannelBufferBelow(channel, thresholds.low, 180000);
     }
 
     function waitForDrain(channel, threshold, timeoutMs) {
         return waitForChannelBufferBelow(channel, threshold, timeoutMs || 180000);
+    }
+
+    async function sendBinary(channel, data, chunkSize, timeoutMs) {
+        var startedAt = Date.now();
+        var thresholds = bufferThresholds(chunkSize);
+        while (true) {
+            await waitForChannelBufferBelow(channel, thresholds.high, remainingTimeout(startedAt, timeoutMs));
+            if (channel.readyState !== "open") {
+                throw new Error("DataChannel is not open");
+            }
+            try {
+                channel.send(data);
+                return;
+            } catch (error) {
+                if (!isBackpressureError(error) || timedOut(startedAt, timeoutMs)) {
+                    throw error;
+                }
+                await waitForChannelBufferBelow(channel, thresholds.low, remainingTimeout(startedAt, timeoutMs));
+            }
+        }
+    }
+
+    function remainingTimeout(startedAt, timeoutMs) {
+        if (!timeoutMs) {
+            return 180000;
+        }
+        return Math.max(1, timeoutMs - (Date.now() - startedAt));
+    }
+
+    function timedOut(startedAt, timeoutMs) {
+        return Boolean(timeoutMs && Date.now() - startedAt > timeoutMs);
+    }
+
+    function isBackpressureError(error) {
+        var name = error && error.name ? String(error.name) : "";
+        var message = error && error.message ? String(error.message).toLowerCase() : "";
+        return name === "OperationError" ||
+            name === "InvalidStateError" ||
+            message.indexOf("buffer") >= 0 ||
+            message.indexOf("queue") >= 0 ||
+            message.indexOf("full") >= 0;
     }
 
     function waitForOpen(channel) {
@@ -171,6 +213,7 @@
         waitForBufferedAmount: waitForBufferedAmount,
         waitForDrain: waitForDrain,
         waitForOpen: waitForOpen,
+        sendBinary: sendBinary,
         normalizeCandidate: normalizeCandidate
     };
 }());

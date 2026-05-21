@@ -210,13 +210,14 @@
         await P2P.waitForOpen(state.fileChannel);
 
         var chunkSize = state.effectiveChunkSize || P2P.resolveChunkSize(state.config, state.pc);
+        var backpressureTimeoutMs = (state.config.activeTransferIdleTimeoutSeconds || 180) * 1000;
         for (var offset = 0; offset < state.file.size; offset += chunkSize) {
-            var chunk = await state.file.slice(offset, Math.min(offset + chunkSize, state.file.size)).arrayBuffer();
             await P2P.waitForBufferedAmount(state.fileChannel, chunkSize);
+            var chunk = await state.file.slice(offset, Math.min(offset + chunkSize, state.file.size)).arrayBuffer();
             if (state.fileChannel.readyState !== "open") {
                 throw new Error("file DataChannel이 전송 중 닫혔습니다.");
             }
-            state.fileChannel.send(chunk);
+            await P2P.sendBinary(state.fileChannel, chunk, chunkSize, backpressureTimeoutMs);
             state.bytesSent += chunk.byteLength;
             state.chunksSent += 1;
             var now = Date.now();

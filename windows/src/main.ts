@@ -1,4 +1,5 @@
 import "./style.css";
+import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import TauriWebSocket, { type Message as TauriWebSocketMessage } from "@tauri-apps/plugin-websocket";
 
@@ -71,6 +72,11 @@ interface ErrorMessage {
   message: string;
 }
 
+interface NativeSaveHandle {
+  id: number;
+  path: string;
+}
+
 interface WsMessage {
   type: string;
   sdp?: RTCSessionDescriptionInit;
@@ -88,8 +94,9 @@ interface WsMessage {
 const DEFAULT_SERVER_URL = "https://files.dcout.site";
 const LEGACY_DEFAULT_SERVER_URL = "https://files.sexyminup.site";
 const DEFAULT_CHUNK_SIZE = 64 * 1024;
-const HIGH_WATER_BYTES = 32 * 1024 * 1024;
-const LOW_WATER_BYTES = 8 * 1024 * 1024;
+const MAX_SAFE_CHUNK_SIZE = 64 * 1024;
+const HIGH_WATER_BYTES = 4 * 1024 * 1024;
+const LOW_WATER_BYTES = 1024 * 1024;
 const ACK_CHUNK_INTERVAL = 64;
 const ERROR_CODES = {
   UNKNOWN: "E_UNKNOWN",
@@ -119,6 +126,8 @@ const state: {
   controlChannel: RTCDataChannel | null;
   fileChannel: RTCDataChannel | null;
   writer: FileSystemWritableFileStream | null;
+  nativeSaveId: number | null;
+  nativeSavePath: string | null;
   fallbackChunks: Array<ArrayBuffer>;
   fallbackMode: boolean;
   downloadUrl: string | null;
@@ -149,6 +158,8 @@ const state: {
   controlChannel: null,
   fileChannel: null,
   writer: null,
+  nativeSaveId: null,
+  nativeSavePath: null,
   fallbackChunks: [],
   fallbackMode: false,
   downloadUrl: null,
@@ -374,6 +385,24 @@ async function prepareWriterAndConnect(): Promise<void> {
     setError("먼저 코드를 조회하세요.");
     return;
   }
+  if (isTauriApp()) {
+    const handle = await pickNativeSaveFile(state.room.file_name);
+    if (!handle) {
+      setStatus("저장 위치 선택 취소됨");
+      clearError();
+      return;
+    }
+    state.nativeSaveId = handle.id;
+    state.nativeSavePath = handle.path;
+    state.writer = null;
+    state.fallbackMode = false;
+    state.fallbackChunks = [];
+    clearDownloadLink();
+    setText("connectionText", `저장: ${handle.path}`);
+    setStatus("상대 접속 대기 중");
+    await openWebSocket(state.room.room_id, "receiver");
+    return;
+  }
   if (!window.showSaveFilePicker) {
     enableBlobFallback();
     setStatus("상대 접속 대기 중");
@@ -406,6 +435,7 @@ async function prepareWriterAndConnect(): Promise<void> {
 }
 
 function enableBlobFallback(): void {
+  abortNativeSave();
   state.writer = null;
   state.fallbackMode = true;
   state.fallbackChunks = [];
@@ -657,10 +687,10 @@ async function sendFileChunks(): Promise<void> {
   await waitForOpen(state.fileChannel);
   const chunkSize = resolveChunkSize();
   for (let offset = 0; offset < state.file.size; offset += chunkSize) {
-    await waitForSendBuffer(state.fileChannel, chunkSize, 30000);
+    await waitForSendBuffer(state.fileChannel, chunkSize, activeTimeoutMs());
     if (state.fileChannel.readyState !== "open") throw new Error("file DataChannel이 전송 중 닫혔습니다.");
     const chunk = await state.file.slice(offset, Math.min(offset + chunkSize, state.file.size)).arrayBuffer();
-    state.fileChannel.send(chunk);
+    await sendDataChannelBuffer(state.fileChannel, chunk, chunkSize, activeTimeoutMs());
     state.bytesSent += chunk.byteLength;
     state.chunksSent += 1;
     const now = Date.now();
@@ -693,6 +723,8 @@ async function writeChunk(data: ArrayBuffer | Blob): Promise<void> {
   try {
     if (state.writer) {
       await state.writer.write(view);
+    } else if (state.nativeSaveId !== null) {
+      await invoke("native_save_write", { id: state.nativeSaveId, bytes: Array.from(view) });
     } else if (state.fallbackMode) {
       state.fallbackChunks.push(arrayBuffer);
     } else {
@@ -729,6 +761,14 @@ async function maybeFinalizeReceive(): Promise<void> {
       return;
     }
     state.writer = null;
+  } else if (state.nativeSaveId !== null) {
+    try {
+      await invoke("native_save_close", { id: state.nativeSaveId });
+    } catch (error) {
+      failTransfer(ERROR_CODES.STORAGE_CLOSE_FAILED, errorMessage(error));
+      return;
+    }
+    state.nativeSaveId = null;
   } else if (state.fallbackMode) {
     const blob = new Blob(state.fallbackChunks, { type: state.manifest.mime_type || "application/octet-stream" });
     const link = byId<HTMLAnchorElement>("downloadLink");
@@ -798,12 +838,12 @@ function configureFileChannel(channel: RTCDataChannel): void {
 }
 
 function resolveChunkSize(): number {
-  const configured = Number(state.config?.chunkSizeBytes) || DEFAULT_CHUNK_SIZE;
+  let configured = Number(state.config?.chunkSizeBytes) || DEFAULT_CHUNK_SIZE;
   const maxMessageSize = Number(state.pc?.sctp?.maxMessageSize) || 0;
   if (Number.isFinite(maxMessageSize) && maxMessageSize > 0 && configured > maxMessageSize) {
-    return Math.max(1, Math.floor(maxMessageSize));
+    configured = Math.max(1, Math.floor(maxMessageSize));
   }
-  return configured;
+  return Math.max(1, Math.min(configured, MAX_SAFE_CHUNK_SIZE));
 }
 
 function bufferThresholds(chunkSize: number): { low: number; high: number } {
@@ -825,6 +865,22 @@ function waitForSendBuffer(channel: RTCDataChannel, chunkSize: number, timeoutMs
   const thresholds = bufferThresholds(chunkSize);
   if (channel.bufferedAmount <= thresholds.high) return Promise.resolve();
   return waitForBufferBelow(channel, thresholds.low, timeoutMs);
+}
+
+async function sendDataChannelBuffer(channel: RTCDataChannel, data: ArrayBuffer, chunkSize: number, timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  const thresholds = bufferThresholds(chunkSize);
+  while (true) {
+    await waitForBufferBelow(channel, thresholds.high, remainingTimeout(started, timeoutMs));
+    if (channel.readyState !== "open") throw new Error("DataChannel이 열려 있지 않습니다.");
+    try {
+      channel.send(data);
+      return;
+    } catch (error) {
+      if (!isBackpressureError(error) || Date.now() - started > timeoutMs) throw error;
+      await waitForBufferBelow(channel, thresholds.low, remainingTimeout(started, timeoutMs));
+    }
+  }
 }
 
 function waitForBufferBelow(channel: RTCDataChannel, threshold: number, timeoutMs: number): Promise<void> {
@@ -857,6 +913,20 @@ function waitForBufferBelow(channel: RTCDataChannel, threshold: number, timeoutM
     timer = window.setInterval(check, 50);
     check();
   });
+}
+
+function remainingTimeout(started: number, timeoutMs: number): number {
+  return Math.max(1, timeoutMs - (Date.now() - started));
+}
+
+function isBackpressureError(error: unknown): boolean {
+  const name = error instanceof DOMException || error instanceof Error ? error.name : "";
+  const message = errorMessage(error).toLowerCase();
+  return name === "OperationError" ||
+    name === "InvalidStateError" ||
+    message.includes("buffer") ||
+    message.includes("queue") ||
+    message.includes("full");
 }
 
 async function apiJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -971,6 +1041,7 @@ function failTransfer(code: string, message?: string): void {
   sendWs({ type: "transfer-failed", error_code: code, reason: message });
   void state.writer?.close().catch(() => undefined);
   state.writer = null;
+  abortNativeSave();
   setStatus("실패");
   setError(`[${code}] ${message}`);
 }
@@ -979,6 +1050,7 @@ function resetTransfer(): void {
   state.ws?.close();
   state.pc?.close();
   void state.writer?.close().catch(() => undefined);
+  abortNativeSave();
   resetRuntime();
   setStatus("대기 중");
   setText("connectionText", "대기 중");
@@ -1002,6 +1074,8 @@ function resetRuntime(): void {
   state.controlChannel = null;
   state.fileChannel = null;
   state.writer = null;
+  state.nativeSaveId = null;
+  state.nativeSavePath = null;
   clearDownloadLink();
   state.fallbackChunks = [];
   state.fallbackMode = false;
@@ -1087,6 +1161,18 @@ function clearDownloadLink(): void {
   link.hidden = true;
   link.removeAttribute("href");
   link.removeAttribute("download");
+}
+
+async function pickNativeSaveFile(suggestedName: string): Promise<NativeSaveHandle | null> {
+  return await invoke<NativeSaveHandle | null>("native_save_pick", { suggestedName });
+}
+
+function abortNativeSave(): void {
+  if (state.nativeSaveId === null) return;
+  const id = state.nativeSaveId;
+  state.nativeSaveId = null;
+  state.nativeSavePath = null;
+  void invoke("native_save_abort", { id }).catch(() => undefined);
 }
 
 function errorMessage(error: unknown): string {

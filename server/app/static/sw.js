@@ -1,14 +1,14 @@
-const CACHE_NAME = "send-honey-where-v3";
+const CACHE_NAME = "send-honey-where-v4";
 const CORE_ASSETS = [
   "/",
   "/send",
   "/receive",
   "/manifest.webmanifest",
   "/static/css/style.css?v=send-honey-where",
-  "/static/js/common.js?v=send-honey-where-3",
-  "/static/js/webrtc_protocol.js?v=send-honey-where-3",
-  "/static/js/send.js?v=send-honey-where-3",
-  "/static/js/receive.js?v=send-honey-where-3",
+  "/static/js/common.js?v=send-honey-where-4",
+  "/static/js/webrtc_protocol.js?v=send-honey-where-4",
+  "/static/js/send.js?v=send-honey-where-4",
+  "/static/js/receive.js?v=send-honey-where-4",
   "/static/img/honey-transfer-hero.png",
   "/static/img/pwa-icon-192.png",
   "/static/img/pwa-icon-512.png"
