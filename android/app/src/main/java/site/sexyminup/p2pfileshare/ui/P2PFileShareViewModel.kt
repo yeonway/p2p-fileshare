@@ -46,7 +46,6 @@ import site.sexyminup.p2pfileshare.transfer.resolveDataChannelChunkSize
 import site.sexyminup.p2pfileshare.webrtc.WebRtcManager
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.URLEncoder
 import java.nio.ByteBuffer
 import java.util.UUID
 import kotlin.math.max
@@ -178,7 +177,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                 val loadedConfig = apiClient.getConfig(serverUrl)
                 config = loadedConfig
                 setStatus("방 생성 중")
-                val created = apiClient.createRoom(serverUrl, file.name, file.size, file.mimeType)
+                val created = apiClient.createRoom(serverUrl, file.name, file.size, normalizeMimeType(file.mimeType))
                 room = created
                 transferId = UUID.randomUUID().toString()
                 _uiState.update {
@@ -186,7 +185,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                     it.copy(
                         roomCode = created.code,
                         shareUrl = shareUrl,
-                        qrPayload = buildAndroidIntentUrl(created.code, shareUrl),
+                        qrPayload = shareUrl,
                         expiresAt = created.expiresAt,
                         totalBytes = file.size,
                     )
@@ -211,14 +210,15 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                 val loadedConfig = apiClient.getConfig(serverUrl)
                 config = loadedConfig
                 val joined = apiClient.joinRoom(serverUrl, code)
+                val receiveMimeType = normalizeMimeType(joined.mimeType)
                 receiveRoom = joined
                 _uiState.update {
                     it.copy(
                         status = "저장 위치 선택 대기 중",
                         selectedFileName = joined.fileName,
                         selectedFileSize = joined.fileSize,
-                        selectedFileMimeType = joined.mimeType,
-                        receiveMimeType = joined.mimeType.ifBlank { "application/octet-stream" },
+                        selectedFileMimeType = receiveMimeType,
+                        receiveMimeType = receiveMimeType,
                         totalBytes = joined.fileSize,
                     )
                 }
@@ -237,6 +237,17 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
 
     fun consumeSavePickerRequest() {
         _uiState.update { it.copy(pendingSaveFileName = null) }
+    }
+
+    fun reportPickerError(message: String) {
+        _uiState.update {
+            it.copy(
+                status = "파일 선택 실패",
+                error = message.ifBlank { "파일 선택기를 열 수 없습니다." },
+                errorCode = TransferErrorCodes.STORAGE_OPEN_FAILED,
+                pendingSaveFileName = null,
+            )
+        }
     }
 
     fun startReceiving(uri: Uri) {
@@ -430,7 +441,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
             transferId = requireNotNull(transferId),
             fileName = file.name,
             fileSize = file.size,
-            mimeType = file.mimeType,
+            mimeType = normalizeMimeType(file.mimeType),
             chunkSize = chunkSize,
             chunkCount = chunkCount(file.size, chunkSize),
         )
@@ -467,6 +478,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         receiverSenderFinished = false
         transferStartedAt = System.nanoTime()
         _uiState.update { it.copy(status = "전송 중", totalBytes = message.fileSize, progressBytes = 0L) }
+        startForeground("전송 중")
         updateForeground()
         startReceiveWriter(message.fileSize)
         sendSignaling(WsMessage(type = "transfer-started"))
@@ -520,6 +532,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         chunksSent = 0L
         ackedBytes = 0L
         _uiState.update { it.copy(status = "전송 중", progressBytes = 0L, totalBytes = file.size) }
+        startForeground("전송 중")
         updateForeground()
         sendSignaling(WsMessage(type = "transfer-started"))
         waitForDataChannelOpen(fileChannel)
@@ -753,6 +766,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         webRtcManager?.close()
         outputStream?.closeQuietly()
         outputStream = null
+        stopForeground()
         controlChannel = null
         fileChannel = null
         transferId = null
@@ -786,9 +800,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         }
         lastForegroundUpdateAt = 0L
         lastForegroundStatus = ""
-        foregroundActive = runCatching {
-            P2PTransferForegroundService.start(getApplication(), status)
-        }.isSuccess
+        foregroundActive = false
     }
 
     private fun setStatus(status: String) {
@@ -840,6 +852,20 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    private fun startForeground(status: String) {
+        if (foregroundActive) return
+        foregroundActive = runCatching {
+            P2PTransferForegroundService.start(
+                context = getApplication(),
+                status = status,
+                progressBytes = uiState.value.progressBytes,
+                totalBytes = uiState.value.totalBytes,
+            )
+        }.isSuccess
+        lastForegroundUpdateAt = 0L
+        lastForegroundStatus = ""
+    }
+
     private fun stopForeground() {
         if (!foregroundActive) return
         foregroundActive = false
@@ -849,12 +875,16 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     private fun buildReceiveUrl(serverUrl: String, code: String): String =
         "${serverUrl.trimEnd('/')}/receive?code=$code"
 
-    private fun buildAndroidIntentUrl(code: String, fallbackUrl: String): String {
-        val fallback = URLEncoder.encode(fallbackUrl, "UTF-8")
-        return "intent://receive?code=$code#Intent;scheme=sendhoney;package=site.sexyminup.p2pfileshare;S.browser_fallback_url=$fallback;end"
-    }
-
     private fun resolveChunkSize(): Int = resolveDataChannelChunkSize(config?.chunkSizeBytes)
+
+    private fun normalizeMimeType(value: String?): String {
+        val normalized = value.orEmpty().trim().lowercase()
+        return if (normalized.contains("/") && !normalized.contains(";") && normalized.length <= 100) {
+            normalized
+        } else {
+            "application/octet-stream"
+        }
+    }
 
     private fun activeTimeoutMs(): Long =
         ((config?.activeTransferIdleTimeoutSeconds ?: 180).coerceAtLeast(1) * 1000L)

@@ -1,5 +1,9 @@
+@file:OptIn(ExperimentalSerializationApi::class)
+
 package site.sexyminup.p2pfileshare.transfer
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -9,6 +13,7 @@ import kotlinx.serialization.json.jsonPrimitive
 
 @Serializable
 data class ManifestMessage(
+    @EncodeDefault
     val type: String = "manifest",
     @SerialName("transfer_id") val transferId: String,
     @SerialName("file_name") val fileName: String,
@@ -21,6 +26,7 @@ data class ManifestMessage(
 
 @Serializable
 data class AckMessage(
+    @EncodeDefault
     val type: String = "ack",
     @SerialName("transfer_id") val transferId: String? = null,
     @SerialName("received_bytes") val receivedBytes: Long,
@@ -29,6 +35,7 @@ data class AckMessage(
 
 @Serializable
 data class SenderFinishedMessage(
+    @EncodeDefault
     val type: String = "sender-finished",
     @SerialName("transfer_id") val transferId: String,
     @SerialName("total_bytes") val totalBytes: Long,
@@ -37,6 +44,7 @@ data class SenderFinishedMessage(
 
 @Serializable
 data class ReceiverCompleteMessage(
+    @EncodeDefault
     val type: String = "receiver-complete",
     @SerialName("transfer_id") val transferId: String,
     @SerialName("total_bytes") val totalBytes: Long,
@@ -45,6 +53,7 @@ data class ReceiverCompleteMessage(
 
 @Serializable
 data class ErrorMessage(
+    @EncodeDefault
     val type: String = "error",
     @SerialName("transfer_id") val transferId: String? = null,
     val code: String = TransferErrorCodes.UNKNOWN,

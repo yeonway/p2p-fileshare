@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+p2p-fileshare/
+
 server/.env
 server/data/*.db
 server/data/*.db-shm
@@ -11,6 +13,12 @@ server/data/*.sqlite
 server/data/*.sqlite*
 *.log
 
+.gradle/
+android/.gradle/
+android/local.properties
+
 node_modules/
 dist/
 build/
+target/
+windows/src-tauri/target/

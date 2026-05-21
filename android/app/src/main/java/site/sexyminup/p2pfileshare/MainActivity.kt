@@ -86,13 +86,21 @@ class MainActivity : ComponentActivity() {
                         val fileName = state.pendingSaveFileName
                         if (fileName != null) {
                             viewModel.consumeSavePickerRequest()
-                            createDocument.launch(fileName)
+                            runCatching { createDocument.launch(fileName) }
+                                .onFailure {
+                                    viewModel.reportPickerError(it.message ?: "저장 위치 선택기를 열 수 없습니다.")
+                                }
                         }
                     }
 
                     P2PFileShareScreen(
                         state = state,
-                        onPickSendFile = { openDocument.launch(arrayOf("*/*")) },
+                        onPickSendFile = {
+                            runCatching { openDocument.launch(arrayOf("*/*")) }
+                                .onFailure {
+                                    viewModel.reportPickerError(it.message ?: "파일 선택기를 열 수 없습니다.")
+                                }
+                        },
                         onCreateRoom = viewModel::createSendRoom,
                         onJoinRoom = viewModel::joinReceiveRoom,
                         onCodeChange = viewModel::updateCode,

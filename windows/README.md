@@ -1,6 +1,6 @@
 # Windows Tauri WebView MVP
 
-Tauri 2 + Vite + TypeScript 기반 Windows MVP입니다. 이번 단계는 WebView File API 기반 구현이며, Rust native streaming bridge는 Phase 2 TODO로 남깁니다.
+Tauri 2 + Vite + TypeScript 기반 Windows MVP입니다. Tauri 앱에서는 native save picker와 Rust side chunk write를 우선 사용하고, 브라우저 실행에서는 Web File API fallback을 사용합니다.
 
 ## 구현 상태
 
@@ -8,7 +8,8 @@ Tauri 2 + Vite + TypeScript 기반 Windows MVP입니다. 이번 단계는 WebVie
 - WebSocket: signaling/status JSON only
 - WebRTC: `control` JSON DataChannel + `file` binary DataChannel
 - sender: WebView `File.slice().arrayBuffer()` chunk read
-- receiver: `showSaveFilePicker()` + `FileSystemWritableFileStream.write()` chunk write
+- receiver: Tauri native save picker + Rust `BufWriter<File>` chunk write
+- browser fallback receiver: `showSaveFilePicker()` + `FileSystemWritableFileStream.write()` chunk write, 미지원 시 Blob download fallback
 - 완료 조건:
   - sender는 `receiver-complete` 전까지 완료 처리하지 않음
   - receiver는 `receivedBytes == manifest.file_size`이고 writer close 완료 후 `receiver-complete` 전송
@@ -49,7 +50,7 @@ npm run tauri:build
 
 ## 제한사항 / Phase 2 TODO
 
-- Rust native streaming bridge는 아직 없습니다.
-- 수신 저장은 WebView가 File System Access API `showSaveFilePicker()`를 지원해야 합니다. 지원하지 않으면 전체 파일 메모리 fallback을 하지 않고 명확한 오류를 표시합니다.
-- native file picker/save picker와 Rust side chunk read/write bridge는 Phase 2에서 구현합니다.
+- native 수신 저장은 구현되어 있지만, 송신 쪽은 아직 WebView `File.slice()` 기반입니다.
+- 브라우저 fallback의 Blob download 모드는 완료 전까지 chunk를 메모리에 보관하므로 대용량 파일에는 적합하지 않습니다.
+- Rust side sender chunk read bridge와 재시작/resume은 Phase 2에서 구현합니다.
 - hash 검증과 `request-missing` chunk 재전송은 TODO입니다.

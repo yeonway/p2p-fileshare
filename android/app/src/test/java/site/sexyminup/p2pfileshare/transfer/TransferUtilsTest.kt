@@ -1,5 +1,6 @@
 package site.sexyminup.p2pfileshare.transfer
 
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -36,5 +37,34 @@ class TransferUtilsTest {
     fun filenameSanitizeDropsPath() {
         assertEquals("video.mp4", sanitizeDisplayFileName("../secret/video.mp4"))
         assertEquals("file", sanitizeDisplayFileName(".."))
+    }
+
+    @Test
+    fun transferControlMessagesKeepTypeWhenDefaultEncodingIsDisabled() {
+        val json = Json { encodeDefaults = false }
+        val manifest = json.encodeManifest(
+            ManifestMessage(
+                transferId = "transfer-1",
+                fileName = "video.mp4",
+                fileSize = 10,
+                mimeType = "video/mp4",
+                chunkSize = 65_536,
+                chunkCount = 1,
+            ),
+        )
+        val ack = json.encodeAck(AckMessage(receivedBytes = 0, lastChunkIndex = -1))
+        val senderFinished = json.encodeSenderFinished(
+            SenderFinishedMessage(transferId = "transfer-1", totalBytes = 10, lastChunkIndex = 0),
+        )
+        val receiverComplete = json.encodeReceiverComplete(
+            ReceiverCompleteMessage(transferId = "transfer-1", totalBytes = 10, lastChunkIndex = 0),
+        )
+        val error = json.encodeError(ErrorMessage(transferId = "transfer-1", message = "failed"))
+
+        assertTrue(manifest.contains("\"type\":\"manifest\""))
+        assertTrue(ack.contains("\"type\":\"ack\""))
+        assertTrue(senderFinished.contains("\"type\":\"sender-finished\""))
+        assertTrue(receiverComplete.contains("\"type\":\"receiver-complete\""))
+        assertTrue(error.contains("\"type\":\"error\""))
     }
 }

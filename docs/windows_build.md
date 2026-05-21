@@ -46,7 +46,7 @@ npm run tauri:build
 
 ## Known Limits
 
-- 이번 단계는 WebView File API 기반 MVP입니다.
-- Rust native streaming bridge는 Phase 2 TODO입니다.
-- 수신 저장은 `showSaveFilePicker()` 지원이 필요합니다.
-- 지원하지 않는 WebView에서는 전체 파일 메모리 fallback 없이 오류를 표시합니다.
+- Tauri 앱의 수신 저장은 native save picker와 Rust `BufWriter<File>` chunk write를 사용합니다.
+- 송신 쪽은 아직 WebView `File.slice()` 기반입니다.
+- 브라우저 fallback은 File System Access API를 우선 사용하고, 미지원 시 Blob download fallback을 사용합니다.
+- Blob fallback은 완료 전까지 chunk를 메모리에 보관하므로 대용량 파일에는 적합하지 않습니다.

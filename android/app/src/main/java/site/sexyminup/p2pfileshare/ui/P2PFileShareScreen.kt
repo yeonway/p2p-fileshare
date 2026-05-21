@@ -261,7 +261,7 @@ private fun SendSection(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Text("QR로 앱 열기", fontWeight = FontWeight.Black)
+                        Text("QR로 받기 링크 열기", fontWeight = FontWeight.Black)
                         Image(
                             bitmap = remember(state.qrPayload) { createQrImageBitmap(state.qrPayload) },
                             contentDescription = "받기 앱 열기 QR",
@@ -272,7 +272,7 @@ private fun SendSection(
                                 .padding(10.dp),
                         )
                         Text(
-                            "Android 앱 설치 후 QR을 찍으면 받기 화면에 코드가 자동 입력됩니다.",
+                            "QR을 찍으면 받기 링크가 열립니다. 앱 링크가 연결된 기기에서는 앱으로 열 수 있습니다.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
                         )
