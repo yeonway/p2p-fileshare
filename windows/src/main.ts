@@ -1,6 +1,15 @@
 import "./style.css";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import TauriWebSocket, { type Message as TauriWebSocketMessage } from "@tauri-apps/plugin-websocket";
 
 type Role = "sender" | "receiver";
+type MaybePromise<T> = T | Promise<T>;
+
+interface SignalingSocket {
+  send(data: string): MaybePromise<void>;
+  close(): MaybePromise<void>;
+  isOpen(): boolean;
+}
 
 interface ConfigResponse {
   iceServers: RTCIceServer[];
@@ -76,6 +85,7 @@ interface WsMessage {
 
 const DEFAULT_SERVER_URL = "https://files.dcout.site";
 const SECONDARY_SERVER_URL = "https://files.sexyminup.site";
+const LEGACY_DEFAULT_SERVER_URL = "https://files.sexyminup.site";
 const DEFAULT_CHUNK_SIZE = 64 * 1024;
 const HIGH_WATER_BYTES = 32 * 1024 * 1024;
 const LOW_WATER_BYTES = 8 * 1024 * 1024;
@@ -88,7 +98,7 @@ const state: {
   config: ConfigResponse | null;
   room: RoomCreateResponse | RoomJoinResponse | null;
   file: File | null;
-  ws: WebSocket | null;
+  ws: SignalingSocket | null;
   pc: RTCPeerConnection | null;
   controlChannel: RTCDataChannel | null;
   fileChannel: RTCDataChannel | null;
@@ -111,7 +121,7 @@ const state: {
   lastProgressAt: number;
   missingDataTimer: number | null;
 } = {
-  serverUrl: localStorage.getItem("serverUrl") || DEFAULT_SERVER_URL,
+  serverUrl: loadServerUrl(),
   config: null,
   room: null,
   file: null,
@@ -162,8 +172,8 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
           <h2>파일 보내기</h2>
           <span>Sender</span>
         </div>
-        <label class="action-button secondary" for="fileInput">${icon("upload")}<span>보낼 파일 선택</span></label>
-        <input id="fileInput" class="visually-hidden" type="file" />
+        <button id="pickFileButton" class="action-button secondary" type="button">${icon("upload")}<span>보낼 파일 선택</span></button>
+        <input id="fileInput" class="file-input" type="file" aria-hidden="true" tabindex="-1" />
         <dl class="meta" id="sendFileMeta">
           <div><dt>파일</dt><dd id="sendFileName">-</dd></div>
           <div><dt>크기</dt><dd id="sendFileSize">-</dd></div>
@@ -257,6 +267,9 @@ function bindUi(): void {
     }
     syncSendFileUi();
   });
+  byId<HTMLButtonElement>("pickFileButton").addEventListener("click", () => {
+    byId<HTMLInputElement>("fileInput").click();
+  });
   byId<HTMLInputElement>("codeInput").addEventListener("input", (event) => {
     const input = event.target as HTMLInputElement;
     input.value = input.value.replace(/\D/g, "").slice(0, 6);
@@ -292,7 +305,7 @@ async function createRoom(): Promise<void> {
     setText("roomCode", state.room.code);
     byId("roomCodeBlock").hidden = false;
     setStatus("상대 접속 대기 중");
-    openWebSocket(state.room.room_id, "sender");
+    await openWebSocket(state.room.room_id, "sender");
   } catch (error) {
     failTransfer(errorMessage(error));
   }
@@ -341,38 +354,85 @@ async function prepareWriterAndConnect(): Promise<void> {
     });
     state.writer = await handle.createWritable();
     setStatus("상대 접속 대기 중");
-    openWebSocket(state.room.room_id, "receiver");
+    await openWebSocket(state.room.room_id, "receiver");
   } catch (error) {
     failTransfer(errorMessage(error));
   }
 }
 
-function openWebSocket(roomId: string, role: Role): void {
-  state.ws = new WebSocket(webSocketUrl(roomId, role));
-  state.ws.onopen = () => {
+async function openWebSocket(roomId: string, role: Role): Promise<void> {
+  const url = webSocketUrl(roomId, role);
+  if (isTauriApp()) {
+    let socket: TauriWebSocket | null = null;
+    const adapter: SignalingSocket = {
+      send: (data) => socket?.send(data),
+      close: () => socket?.disconnect(),
+      isOpen: () => socket !== null,
+    };
+    state.ws = adapter;
+    try {
+      socket = await TauriWebSocket.connect(url, {
+        headers: { Origin: state.serverUrl.replace(/\/$/, "") },
+      });
+    } catch (error) {
+      if (state.ws === adapter) state.ws = null;
+      failTransfer(errorMessage(error));
+      return;
+    }
+    if (state.ws !== adapter) {
+      await socket.disconnect();
+      return;
+    }
+    socket.addListener((message) => {
+      void handleNativeWebSocketMessage(message, role);
+    });
+    sendWs({ type: role === "sender" ? "sender-ready" : "receiver-ready" });
+    setStatus(role === "sender" ? "코드 대기 중" : "WebRTC 연결 중");
+    return;
+  }
+
+  const socket = new WebSocket(url);
+  state.ws = {
+    send: (data) => socket.send(data),
+    close: () => socket.close(),
+    isOpen: () => socket.readyState === WebSocket.OPEN,
+  };
+  socket.onopen = () => {
     sendWs({ type: role === "sender" ? "sender-ready" : "receiver-ready" });
     setStatus(role === "sender" ? "코드 대기 중" : "WebRTC 연결 중");
   };
-  state.ws.onmessage = async (event) => {
-    const message = JSON.parse(event.data) as WsMessage;
-    try {
-      if (message.type === "receiver-ready" && role === "sender") {
-        await createOffer();
-      } else if (message.type === "offer" && role === "receiver" && message.sdp) {
-        await acceptOffer(message.sdp);
-      } else if (message.type === "answer" && role === "sender" && message.sdp) {
-        await state.pc?.setRemoteDescription(message.sdp);
-      } else if (message.type === "ice-candidate" && message.candidate) {
-        await state.pc?.addIceCandidate(new RTCIceCandidate(message.candidate));
-      }
-    } catch (error) {
-      failTransfer(errorMessage(error));
-    }
+  socket.onmessage = (event) => {
+    void handleWebSocketText(String(event.data), role);
   };
-  state.ws.onclose = () => {
+  socket.onclose = () => {
     if (!state.completed && !state.failed) setText("connectionText", "signaling 종료");
   };
-  state.ws.onerror = () => failTransfer("WebSocket signaling 오류");
+  socket.onerror = () => failTransfer("WebSocket signaling 오류");
+}
+
+async function handleNativeWebSocketMessage(message: TauriWebSocketMessage, role: Role): Promise<void> {
+  if (message.type === "Text") {
+    await handleWebSocketText(message.data, role);
+  } else if (message.type === "Close" && !state.completed && !state.failed) {
+    setText("connectionText", "signaling 종료");
+  }
+}
+
+async function handleWebSocketText(data: string, role: Role): Promise<void> {
+  const message = JSON.parse(data) as WsMessage;
+  try {
+    if (message.type === "receiver-ready" && role === "sender") {
+      await createOffer();
+    } else if (message.type === "offer" && role === "receiver" && message.sdp) {
+      await acceptOffer(message.sdp);
+    } else if (message.type === "answer" && role === "sender" && message.sdp) {
+      await state.pc?.setRemoteDescription(message.sdp);
+    } else if (message.type === "ice-candidate" && message.candidate) {
+      await state.pc?.addIceCandidate(new RTCIceCandidate(message.candidate));
+    }
+  } catch (error) {
+    failTransfer(errorMessage(error));
+  }
 }
 
 async function createOffer(): Promise<void> {
@@ -692,7 +752,8 @@ function waitForBufferBelow(channel: RTCDataChannel, threshold: number, timeoutM
 }
 
 async function apiJson<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(state.serverUrl.replace(/\/$/, "") + path, {
+  const fetchImpl = isTauriApp() ? tauriFetch : fetch;
+  const response = await fetchImpl(state.serverUrl.replace(/\/$/, "") + path, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -711,8 +772,8 @@ function webSocketUrl(roomId: string, role: Role): string {
 }
 
 function sendWs(payload: WsMessage): void {
-  if (state.ws?.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify(payload));
+  if (state.ws?.isOpen()) {
+    void state.ws.send(JSON.stringify(payload));
   }
 }
 
@@ -868,6 +929,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isTauriApp(): boolean {
+  return "__TAURI_INTERNALS__" in window;
+}
+
 function byId<T extends HTMLElement = HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
 }
@@ -907,6 +972,11 @@ function statusTone(value: string): string {
 
 function formatServerLabel(value: string): string {
   return value.replace(/^https?:\/\//, "").replace(/\/$/, "");
+}
+
+function loadServerUrl(): string {
+  const saved = (localStorage.getItem("serverUrl") || "").trim().replace(/\/$/, "");
+  return !saved || saved === LEGACY_DEFAULT_SERVER_URL ? DEFAULT_SERVER_URL : saved;
 }
 
 function icon(name: IconName): string {

@@ -129,6 +129,11 @@ h2 {
   color: #ffffff;
 }
 
+.tab:not(.active):hover {
+  background: #f1f6f7;
+  color: #172124;
+}
+
 .content-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
@@ -205,6 +210,10 @@ input:focus-visible {
   border: 0;
 }
 
+.file-input {
+  display: none;
+}
+
 .action-button {
   display: inline-flex;
   align-items: center;
@@ -219,6 +228,17 @@ input:focus-visible {
   font-weight: 800;
   text-align: center;
   text-decoration: none;
+}
+
+.tab:focus-visible,
+.action-button:focus-visible,
+label:focus-visible {
+  outline: 3px solid rgba(20, 108, 117, 0.24);
+  outline-offset: 2px;
+}
+
+.action-button:not(:disabled):hover {
+  filter: brightness(0.98);
 }
 
 .primary {
