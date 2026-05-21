@@ -22,7 +22,7 @@ cp ../.env.example .env
 `.env`에서 반드시 변경합니다.
 
 ```text
-PUBLIC_ORIGIN=https://files.sexyminup.site
+PUBLIC_ORIGIN=https://files.dcout.site
 IP_HASH_SALT=<random-secret>
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<strong-password>
@@ -68,7 +68,7 @@ journalctl -u p2p-fileshare -f
 `/etc/caddy/Caddyfile`:
 
 ```caddy
-files.sexyminup.site {
+files.dcout.site {
     reverse_proxy 127.0.0.1:8010
 }
 ```
@@ -81,7 +81,7 @@ sudo systemctl reload caddy
 
 ## 5. DNS
 
-`files.sexyminup.site`의 A/AAAA 레코드를 Raspberry Pi가 연결된 공인 IP로 설정합니다. 공유기 뒤라면 80/443 포트 포워딩이 필요합니다.
+`files.dcout.site`의 A/AAAA 레코드를 Raspberry Pi가 연결된 공인 IP로 설정합니다. 공유기 뒤라면 80/443 포트 포워딩이 필요합니다.
 
 ## 6. 포트 정책
 
@@ -95,7 +95,7 @@ sudo systemctl reload caddy
 
 ## 7. 외부 접속 테스트
 
-1. `https://files.sexyminup.site/health` 확인
+1. `https://files.dcout.site/health` 확인
 2. `/send`에서 파일 선택 후 6자리 코드 생성
 3. 다른 기기 또는 다른 네트워크에서 `/receive` 접속
 4. 코드 입력 후 저장 위치 선택

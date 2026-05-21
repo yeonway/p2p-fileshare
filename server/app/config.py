@@ -60,7 +60,7 @@ class Settings:
         return cls(
             app_host=os.getenv("APP_HOST", "127.0.0.1"),
             app_port=_int_env("APP_PORT", 8010),
-            public_origin=os.getenv("PUBLIC_ORIGIN", "https://files.sexyminup.site").rstrip("/"),
+            public_origin=os.getenv("PUBLIC_ORIGIN", "https://files.dcout.site").rstrip("/"),
             database_url=os.getenv("DATABASE_URL", "sqlite:///./data/app.db"),
             room_ttl_minutes=_int_env("ROOM_TTL_MINUTES", 30),
             active_transfer_idle_timeout_seconds=_int_env("ACTIVE_TRANSFER_IDLE_TIMEOUT_SECONDS", 180),

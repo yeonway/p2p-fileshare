@@ -23,7 +23,7 @@ max-port=49200
 ## 환경변수
 
 ```text
-WEBRTC_TURN_URLS=turn:files.sexyminup.site:3478
+WEBRTC_TURN_URLS=turn:files.dcout.site:3478
 WEBRTC_TURN_USERNAME=<username>
 WEBRTC_TURN_CREDENTIAL=<password>
 ```

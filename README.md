@@ -1,4 +1,4 @@
-# Raspberry Pi P2P File Share
+# sand honey where
 
 SendAnywhere처럼 6자리 코드로 파일을 주고받는 P2P 파일 전송 MVP입니다. Raspberry Pi 서버는 방 생성, signaling, 기록 저장만 담당하고 파일 본문은 저장하거나 중계하지 않습니다.
 
