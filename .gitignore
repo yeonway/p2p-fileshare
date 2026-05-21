@@ -14,5 +14,3 @@ server/data/*.sqlite*
 node_modules/
 dist/
 build/
-
-p2p-fileshare/
