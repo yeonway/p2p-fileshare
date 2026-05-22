@@ -43,6 +43,52 @@ uvicorn app.main:app --host 127.0.0.1 --port 8010
 
 브라우저에서 `http://127.0.0.1:8010`을 열고 `/send`, `/receive`를 테스트합니다.
 
+## 라즈베리파이 적용
+
+이미 라즈베리파이에 repo가 clone되어 있다면 아래처럼 현재 작업 브랜치를 받아 적용합니다.
+
+```bash
+cd /home/user/server/p2p-fileshare
+git fetch origin
+git checkout codex/windows-app-fixes
+git pull --ff-only
+```
+
+서버 의존성을 갱신하고 저장 폴더를 준비합니다.
+
+```bash
+cd server
+. .venv/bin/activate
+pip install -r requirements.txt
+mkdir -p data/stored_files
+cp ../.env.example .env
+```
+
+기존 `.env`가 이미 있으면 덮어쓰지 말고 아래 값만 추가/수정합니다.
+
+```text
+STORED_FILES_DIR=./data/stored_files
+STORED_CHUNK_SIZE_BYTES=4194304
+STORED_MAX_TOTAL_SIZE_BYTES=32212254720
+STORED_IDLE_TIMEOUT_SECONDS=600
+STORED_READY_TTL_MINUTES=30
+```
+
+systemd로 운영 중이면 재시작합니다.
+
+```bash
+sudo systemctl restart p2p-fileshare
+sudo systemctl status p2p-fileshare
+```
+
+직접 실행할 때는 다음 명령을 사용합니다.
+
+```bash
+cd /home/user/server/p2p-fileshare/server
+. .venv/bin/activate
+uvicorn app.main:app --host 127.0.0.1 --port 8010
+```
+
 ## 주요 환경변수
 
 ```text
