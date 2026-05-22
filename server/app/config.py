@@ -76,6 +76,11 @@ class Settings:
     webrtc_turn_username: str
     webrtc_turn_credential: str
     android_app_sha256_cert_fingerprints: list[str]
+    stored_files_dir: str
+    stored_chunk_size_bytes: int
+    stored_max_total_size_bytes: int
+    stored_idle_timeout_seconds: int
+    stored_ready_ttl_minutes: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -101,6 +106,11 @@ class Settings:
             webrtc_turn_username=os.getenv("WEBRTC_TURN_USERNAME", ""),
             webrtc_turn_credential=os.getenv("WEBRTC_TURN_CREDENTIAL", ""),
             android_app_sha256_cert_fingerprints=_split_csv(os.getenv("ANDROID_APP_SHA256_CERT_FINGERPRINTS", "")),
+            stored_files_dir=os.getenv("STORED_FILES_DIR", "./data/stored_files"),
+            stored_chunk_size_bytes=_int_env("STORED_CHUNK_SIZE_BYTES", 4 * 1024 * 1024),
+            stored_max_total_size_bytes=_int_env("STORED_MAX_TOTAL_SIZE_BYTES", 30 * 1024 * 1024 * 1024),
+            stored_idle_timeout_seconds=_int_env("STORED_IDLE_TIMEOUT_SECONDS", 600),
+            stored_ready_ttl_minutes=_int_env("STORED_READY_TTL_MINUTES", 30),
         )
 
     @property

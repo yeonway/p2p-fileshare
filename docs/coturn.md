@@ -1,12 +1,12 @@
 # coturn Optional Fallback
 
-기본 연결은 STUN + direct P2P입니다. TURN/coturn은 direct P2P가 실패하는 네트워크 조합에서 선택적으로 사용합니다.
+coturn은 hidden P2P 모드(`/p2p/send`, `/p2p/receive`)에서만 쓰는 선택 기능입니다. 기본 stored transfer mode는 HTTP upload/download이므로 TURN이 필요하지 않습니다.
 
-## 중요한 점
+## 중요 사항
 
-- TURN을 써도 파일은 서버 디스크에 저장되지 않습니다.
-- TURN 사용 시 파일 트래픽은 TURN 서버를 경유할 수 있습니다.
-- TURN은 relay 서버이며, 이 프로젝트의 FastAPI signaling 서버가 파일을 중계하는 것은 아닙니다.
+- TURN은 WebRTC relay 서버입니다.
+- FastAPI stored transfer API의 파일 임시 저장과는 별개입니다.
+- Windows MVP 또는 Web hidden P2P 테스트에서 direct P2P가 실패하는 네트워크 조합일 때만 사용합니다.
 
 ## 포트
 
@@ -38,7 +38,7 @@ WEBRTC_TURN_CREDENTIAL=
 
 ## UI 표시
 
-클라이언트는 WebRTC `getStats()`로 selected candidate에 relay candidate가 있는지 확인하고 다음 중 하나를 표시합니다.
+hidden P2P 클라이언트는 WebRTC `getStats()`로 selected candidate에 relay candidate가 있는지 확인하고 다음 중 하나를 표시합니다.
 
 - `직접 P2P`
 - `TURN relay`

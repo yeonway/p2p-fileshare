@@ -7,11 +7,13 @@ from .config import get_settings
 from .db import fetch_all
 from .rooms import expire_waiting_rooms, mark_transfer_failed
 from .security import parse_utc, utc_now
+from .stored import cleanup_stored_transfers
 
 
 def cleanup_once() -> None:
     settings = get_settings()
     expire_waiting_rooms()
+    cleanup_stored_transfers()
     active_rows = fetch_all("SELECT room_id, started_at FROM transfers WHERE status = 'transferring'")
     now = utc_now()
     for row in active_rows:

@@ -109,6 +109,8 @@ class MainActivity : ComponentActivity() {
                         onServerUrlChange = viewModel::updateServerUrl,
                         onSaveServerUrl = viewModel::saveServerUrl,
                         onRequestSaveLocation = viewModel::requestSaveLocation,
+                        onRestartTransfer = viewModel::restartTransfer,
+                        onAutoResetChange = viewModel::updateAutoResetOnComplete,
                         onCancelTransfer = viewModel::resetTransfer,
                     )
                 }

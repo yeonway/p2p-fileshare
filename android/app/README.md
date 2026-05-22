@@ -1,20 +1,20 @@
 # Android App Module
 
-`site.sexyminup.p2pfileshare` Android app module입니다.
+`site.sexyminup.p2pfileshare` Android app module입니다. 패키지명은 기존 이름을 유지하지만 기본 전송 방식은 HTTP stored transfer입니다.
 
 주요 코드 위치:
 
-- `data/`: REST API, 설정 저장
-- `signaling/`: OkHttp WebSocket signaling
-- `webrtc/`: Native WebRTC `PeerConnection` / `DataChannel`
-- `transfer/`: protocol message, SAF file metadata, formatting
-- `ui/`: Compose UI와 전송 상태 ViewModel
+- `data/`: stored REST API, 설정 저장, response model
+- `transfer/`: SAF file metadata, formatting helper
+- `ui/`: Compose UI와 transfer ViewModel
+- `P2PTransferForegroundService.kt`: 업로드/다운로드 진행률 foreground 알림
+- `webrtc/`, `signaling/`: 기존 P2P 호환 코드. 기본 Android UI에서는 사용하지 않습니다.
 
 빌드:
 
 ```powershell
 cd android
-.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug
 ```
 
 APK:

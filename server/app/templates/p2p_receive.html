@@ -4,11 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#145A64">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>파일 받기 - send honey where</title>
+    <title>P2P 파일 받기 - send honey where</title>
     <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="apple-touch-icon" href="/static/img/pwa-icon-192.png">
     <link rel="stylesheet" href="/static/css/style.css?v=send-honey-where">
 </head>
 <body class="app-page">
@@ -18,58 +15,48 @@
             <span class="brand-text">send honey where</span>
         </a>
         <nav class="nav-links" aria-label="주요 이동">
-            <a href="/send">보내기</a>
-            <button id="installAppButton" class="nav-install hidden" type="button">앱 설치</button>
+            <a href="/p2p/send">P2P 보내기</a>
+            <a href="/receive">기본 받기</a>
         </nav>
     </header>
-
     <main class="shell app-shell">
         <section class="page-heading">
-            <p class="eyebrow">Stored transfer</p>
-            <h1>파일 받기</h1>
-            <p class="muted">전달받은 6자리 코드로 Raspberry Pi에 임시 저장된 파일을 받습니다.</p>
+            <p class="eyebrow">Hidden P2P mode</p>
+            <h1>P2P 파일 받기</h1>
+            <p class="muted">송신자와 동시에 연결해 WebRTC DataChannel로 직접 받습니다.</p>
         </section>
-
         <section class="panel">
             <div class="panel-heading">
                 <div>
                     <span class="label">Step 1</span>
                     <h2>코드 입력</h2>
                 </div>
-                <span class="panel-badge">HTTP 저장</span>
+                <span class="panel-badge">P2P</span>
             </div>
             <div class="field code-input">
                 <label for="codeInput">6자리 코드</label>
                 <input id="codeInput" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="123456">
             </div>
-            <label class="toggle-row">
-                <input id="autoResetToggle" type="checkbox" checked>
-                <span>전송 끝나면 자동 초기화</span>
-            </label>
             <div class="actions">
                 <button id="lookupButton" class="button primary" type="button">
                     <span class="button-icon" aria-hidden="true">↵</span>
                     파일 정보 확인
                 </button>
-                <button id="downloadButton" class="button hidden" type="button">
+                <button id="connectButton" class="button hidden" type="button">
                     <span class="button-icon" aria-hidden="true">↓</span>
-                    다운로드 시작
-                </button>
-                <button id="restartDownloadButton" class="button hidden" type="button">
-                    <span class="button-icon" aria-hidden="true">↻</span>
-                    재시작
+                    저장 위치 선택 및 연결
                 </button>
             </div>
             <p id="errorText" class="error" role="alert"></p>
-            <p id="fallbackWarning" class="warning hidden">이 브라우저는 직접 저장을 지원하지 않아 작은 파일만 메모리에 받은 뒤 저장합니다.</p>
+            <p id="fallbackWarning" class="warning hidden">이 브라우저는 완료 전까지 메모리에 보관한 뒤 다운로드 링크를 제공할 수 있습니다.</p>
         </section>
-
         <section id="transferPanel" class="panel hidden">
             <dl class="status-grid">
                 <div><dt>파일</dt><dd id="fileNameText">-</dd></div>
-                <div><dt>원본 크기</dt><dd id="fileSizeText">-</dd></div>
-                <div><dt>다운로드 크기</dt><dd id="downloadSizeText">-</dd></div>
-                <div><dt>형태</dt><dd id="bundleText">-</dd></div>
+                <div><dt>크기</dt><dd id="fileSizeText">-</dd></div>
+                <div><dt>MIME</dt><dd id="mimeText">-</dd></div>
+                <div><dt>WebRTC</dt><dd id="rtcStatusText">대기 중</dd></div>
+                <div><dt>연결 경로</dt><dd id="pathStatusText">확인 전</dd></div>
                 <div><dt>상태</dt><dd id="transferStatusText">대기 중</dd></div>
             </dl>
             <div class="progress-wrap">
@@ -83,8 +70,8 @@
             <a id="downloadLink" class="button hidden" href="#">받은 파일 저장</a>
         </section>
     </main>
-
-    <script src="/static/js/common.js?v=send-honey-where-7"></script>
-    <script src="/static/js/stored_receive.js?v=send-honey-where-1"></script>
+    <script src="/static/js/common.js?v=send-honey-where-6"></script>
+    <script src="/static/js/webrtc_protocol.js?v=send-honey-where-6"></script>
+    <script src="/static/js/receive.js?v=send-honey-where-6"></script>
 </body>
 </html>

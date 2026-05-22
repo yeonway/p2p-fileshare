@@ -36,6 +36,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
@@ -72,6 +73,8 @@ fun P2PFileShareScreen(
     onServerUrlChange: (String) -> Unit,
     onSaveServerUrl: () -> Unit,
     onRequestSaveLocation: () -> Unit,
+    onRestartTransfer: () -> Unit,
+    onAutoResetChange: (Boolean) -> Unit,
     onCancelTransfer: () -> Unit,
 ) {
     var tab by remember { mutableStateOf(Tab.Send) }
@@ -126,9 +129,9 @@ fun P2PFileShareScreen(
                 when (tab) {
                     Tab.Send -> SendSection(state, onPickSendFile, onCreateRoom)
                     Tab.Receive -> ReceiveSection(state, onCodeChange, onJoinRoom, onRequestSaveLocation)
-                    Tab.Settings -> SettingsSection(state, onServerUrlChange, onSaveServerUrl)
+                    Tab.Settings -> SettingsSection(state, onServerUrlChange, onSaveServerUrl, onAutoResetChange)
                 }
-                TransferStatusCard(state, onCancelTransfer)
+                TransferStatusCard(state, onRestartTransfer, onCancelTransfer)
             }
         }
     }
@@ -175,20 +178,20 @@ private fun HeroHeader() {
             }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Private peer-to-peer transfer",
+                    text = "Raspberry Pi stored transfer",
                     color = Color(0xFFFFD86B),
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
                 )
                 Text(
-                    text = "서버에 남기지 않고\n기기 사이로 직접 전송",
+                    text = "Pi에 잠깐 보관하고\n코드로 안정 전송",
                     color = Color(0xFFFFF8E3),
                     fontWeight = FontWeight.Black,
                     fontSize = 30.sp,
                     lineHeight = 34.sp,
                 )
                 Text(
-                    text = "전송 중에는 백그라운드 알림으로 연결을 유지합니다.",
+                    text = "업로드와 다운로드는 백그라운드 알림으로 진행됩니다.",
                     color = Color(0xFFF9E9BC),
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -326,6 +329,7 @@ private fun SettingsSection(
     state: TransferUiState,
     onServerUrlChange: (String) -> Unit,
     onSaveServerUrl: () -> Unit,
+    onAutoResetChange: (Boolean) -> Unit,
 ) {
     SectionCard(title = "설정", label = "Server") {
         Text("서버 도메인은 보안을 위해 고정되어 있습니다.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -347,14 +351,35 @@ private fun SettingsSection(
         ) {
             Text("고정값 다시 적용")
         }
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = Color(0xFFFFFAF0),
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("완료 후 자동 초기화", fontWeight = FontWeight.Black)
+                    Text("다운로드 완료 뒤 상태 화면을 자동으로 비웁니다.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(checked = state.autoResetOnComplete, onCheckedChange = onAutoResetChange)
+            }
+        }
         InfoPill("백그라운드", "전송 중 foreground service 알림으로 앱이 백그라운드에 있어도 연결을 유지합니다.")
         InfoPill("보안", "임의 서버 입력을 막고 HTTPS 운영 도메인만 사용합니다.")
-        InfoPill("파일", "파일 본문은 서버에 업로드하지 않고 WebRTC DataChannel로만 전송합니다.")
+        InfoPill("파일", "파일은 Raspberry Pi에 임시 저장되고 첫 다운로드나 만료 시 삭제됩니다.")
     }
 }
 
 @Composable
-private fun TransferStatusCard(state: TransferUiState, onCancelTransfer: () -> Unit) {
+private fun TransferStatusCard(
+    state: TransferUiState,
+    onRestartTransfer: () -> Unit,
+    onCancelTransfer: () -> Unit,
+) {
     SectionCard(title = "전송 상태", label = "Status") {
         KeyValue("상태", state.status)
         KeyValue("연결", state.connectionState)
@@ -370,6 +395,11 @@ private fun TransferStatusCard(state: TransferUiState, onCancelTransfer: () -> U
         if (state.error != null) {
             val errorText = state.errorCode?.let { "[$it] ${state.error}" } ?: state.error
             Text(errorText, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+        }
+        if (state.restartAvailable) {
+            Button(onClick = onRestartTransfer, modifier = Modifier.fillMaxWidth()) {
+                Text("재시작")
+            }
         }
         OutlinedButton(onClick = onCancelTransfer, modifier = Modifier.fillMaxWidth()) {
             Text("초기화")

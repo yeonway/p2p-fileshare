@@ -1,10 +1,12 @@
 # Windows Build
 
+Windows MVP는 이번 범위에서 기존 WebRTC/P2P 모드를 유지합니다. 기본 Web/Android stored mode와 직접 호환되지 않으며, Windows stored mode 전환은 후속 작업입니다.
+
 ## Requirements
 
 - Node.js 22 또는 호환 버전
 - npm
-- Tauri desktop packaging용 Rust/Cargo
+- Tauri desktop packaging은 Rust/Cargo 필요
 - Windows WebView2 runtime
 
 ## WebView MVP
@@ -33,20 +35,17 @@ npm run build
 npm run tauri:build
 ```
 
-현재 검증 환경에서는 Cargo가 없어 `cargo metadata` 실행 단계에서 실패했습니다. Rust toolchain 설치 후 다시 실행해야 합니다.
+Tauri 패키징은 Rust toolchain과 Cargo가 필요합니다.
 
 ## Manual Test
 
 1. `npm run dev` 또는 Tauri dev로 Windows 앱을 실행합니다.
-2. Windows sender -> Web receiver를 테스트합니다.
-3. Web sender -> Windows receiver를 테스트합니다.
-4. Windows sender -> Android receiver를 테스트합니다.
-5. Android sender -> Windows receiver를 테스트합니다.
-6. 수신 파일 크기가 원본과 같은지 확인합니다.
+2. Web hidden P2P `/p2p/send` -> Windows receiver를 테스트합니다.
+3. Windows sender -> Web hidden P2P `/p2p/receive`를 테스트합니다.
+4. 수신 파일 크기가 원본과 같은지 확인합니다.
 
 ## Known Limits
 
-- Tauri 앱의 수신 저장은 native save picker와 Rust `BufWriter<File>` chunk write를 사용합니다.
-- 송신 쪽은 아직 WebView `File.slice()` 기반입니다.
-- 브라우저 fallback은 File System Access API를 우선 사용하고, 미지원 시 Blob download fallback을 사용합니다.
-- Blob fallback은 완료 전까지 chunk를 메모리에 보관하므로 대용량 파일에는 적합하지 않습니다.
+- Windows는 아직 stored transfer API를 기본으로 사용하지 않습니다.
+- 수신은 native save bridge가 있지만 송신은 WebView `File.slice()` 기반입니다.
+- Tauri 패키징은 Rust/Cargo 환경이 필요합니다.

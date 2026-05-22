@@ -1,7 +1,7 @@
 {
   "name": "send honey where",
   "short_name": "send honey",
-  "description": "Private peer-to-peer file transfer",
+  "description": "Private Raspberry Pi temporary file transfer",
   "id": "/",
   "start_url": "/?source=pwa",
   "scope": "/",
@@ -27,14 +27,14 @@
   ],
   "shortcuts": [
     {
-      "name": "파일 보내기",
-      "short_name": "보내기",
+      "name": "Send files",
+      "short_name": "Send",
       "url": "/send",
       "icons": [{ "src": "/static/img/pwa-icon-192.png", "sizes": "192x192" }]
     },
     {
-      "name": "파일 받기",
-      "short_name": "받기",
+      "name": "Receive files",
+      "short_name": "Receive",
       "url": "/receive",
       "icons": [{ "src": "/static/img/pwa-icon-192.png", "sizes": "192x192" }]
     }

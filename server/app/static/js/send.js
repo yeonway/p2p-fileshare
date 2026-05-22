@@ -1,6 +1,8 @@
 (function () {
     "use strict";
 
+    var AUTO_RESET_DELAY_MS = 2000;
+
     var state = {
         config: null,
         room: null,
@@ -17,9 +19,12 @@
         sendingStarted: false,
         senderFinished: false,
         receiverComplete: false,
+        failed: false,
         effectiveChunkSize: null,
         lastServerProgressAt: 0,
-        ttlTimer: null
+        ttlTimer: null,
+        autoResetTimer: null,
+        pendingIceCandidates: []
     };
 
     function setError(message) {
@@ -36,12 +41,16 @@
     }
 
     async function createRoom() {
+        clearAutoResetTimer();
         setError("");
         state.file = App.byId("fileInput").files[0];
         if (!state.file) {
             setError("보낼 파일을 선택하세요.");
             return;
         }
+        state.failed = false;
+        state.receiverComplete = false;
+        state.pendingIceCandidates = [];
         App.byId("createRoomButton").disabled = true;
         try {
             state.config = await P2P.loadConfig();
@@ -83,12 +92,15 @@
                 await createOffer();
             } else if (message.type === "answer") {
                 await state.pc.setRemoteDescription(new RTCSessionDescription(message.sdp));
-            } else if (message.type === "ice-candidate" && state.pc) {
-                await state.pc.addIceCandidate(P2P.normalizeCandidate(message.candidate));
+                await flushPendingIceCandidates();
+            } else if (message.type === "ice-candidate") {
+                await addOrQueueIceCandidate(message.candidate);
             }
         };
         state.ws.onclose = function () {
-            if (!state.receiverComplete && state.sendingStarted) {
+            if (isP2pEstablished()) {
+                App.setText("receiverStatusText", "signaling closed, P2P transfer continues");
+            } else if (!state.receiverComplete && state.sendingStarted) {
                 failTransfer(App.ErrorCodes.SIGNALING_CLOSED, "signaling 연결이 전송 중 종료되었습니다.");
             } else {
                 App.setText("receiverStatusText", "signaling 종료");
@@ -97,14 +109,17 @@
     }
 
     async function renderShareQr(code) {
-        var receiveUrl = App.buildReceiveUrl(code);
-        var intentUrl = App.buildAndroidIntentUrl(code);
+        var isHiddenP2p = window.location.pathname.indexOf("/p2p/") === 0;
+        var receiveUrl = isHiddenP2p
+            ? window.location.origin + "/p2p/receive?code=" + encodeURIComponent(code)
+            : App.buildReceiveUrl(code);
+        var qrValue = isHiddenP2p ? receiveUrl : App.buildAndroidIntentUrl(code);
         var link = App.byId("shareLink");
         if (link) {
             link.href = receiveUrl;
             link.textContent = receiveUrl;
         }
-        await App.renderQrCode("qrCode", intentUrl);
+        await App.renderQrCode("qrCode", qrValue);
         App.show("qrPanel", true);
     }
 
@@ -117,6 +132,9 @@
                 App.setText("pathStatusText", status);
             } else {
                 App.setText("rtcStatusText", status);
+                if ((status === "failed" || status === "closed") && state.sendingStarted && !state.receiverComplete) {
+                    failTransfer(App.ErrorCodes.PEER_CONNECTION_FAILED, "WebRTC connection failed during transfer");
+                }
             }
         });
         state.controlChannel = state.pc.createDataChannel("control", { ordered: true });
@@ -147,6 +165,10 @@
             }));
         };
         state.controlChannel.onmessage = async function (event) {
+            if (typeof event.data !== "string") {
+                failTransfer(App.ErrorCodes.REMOTE_ERROR, "control DataChannel received non-text message");
+                return;
+            }
             var message = JSON.parse(event.data);
             if (message.type === "ack") {
                 handleAck(message);
@@ -185,6 +207,7 @@
         App.setText("transferStatusText", "완료");
         App.updateProgress(state.file.size, state.file.size, state.startedAt);
         App.stopTransferKeepAlive();
+        scheduleAutoResetAfterComplete();
     }
 
     function failTransfer(code, message) {
@@ -192,10 +215,33 @@
             message = code;
             code = App.ErrorCodes.UNKNOWN;
         }
+        if (state.receiverComplete || state.failed) {
+            return;
+        }
+        state.failed = true;
         App.setText("transferStatusText", "실패");
         setError(App.displayError(code, message));
         App.sendWs(state.ws, { type: "transfer-failed", error_code: code, reason: message });
         App.stopTransferKeepAlive();
+        clearAutoResetTimer();
+    }
+
+    function scheduleAutoResetAfterComplete() {
+        var completedTransferId = state.transferId;
+        clearAutoResetTimer();
+        state.autoResetTimer = window.setTimeout(function () {
+            state.autoResetTimer = null;
+            if (state.receiverComplete && state.transferId === completedTransferId) {
+                window.location.reload();
+            }
+        }, AUTO_RESET_DELAY_MS);
+    }
+
+    function clearAutoResetTimer() {
+        if (state.autoResetTimer !== null) {
+            window.clearTimeout(state.autoResetTimer);
+            state.autoResetTimer = null;
+        }
     }
 
     async function sendFileChunks() {
@@ -219,6 +265,7 @@
             }
             await P2P.sendBinary(state.fileChannel, chunk, chunkSize, backpressureTimeoutMs);
             state.bytesSent += chunk.byteLength;
+            chunk = null;
             state.chunksSent += 1;
             var now = Date.now();
             if (now - state.lastServerProgressAt >= 1000) {
@@ -244,6 +291,36 @@
             last_chunk_index: state.chunksSent - 1
         }));
         App.setText("transferStatusText", "수신 완료 확인 대기 중");
+    }
+
+    async function addOrQueueIceCandidate(rawCandidate) {
+        var candidate = P2P.normalizeCandidate(rawCandidate);
+        if (!candidate) {
+            return;
+        }
+        if (!state.pc || !state.pc.remoteDescription) {
+            state.pendingIceCandidates.push(candidate);
+            return;
+        }
+        await state.pc.addIceCandidate(candidate);
+    }
+
+    async function flushPendingIceCandidates() {
+        if (!state.pc || !state.pc.remoteDescription || !state.pendingIceCandidates.length) {
+            return;
+        }
+        var candidates = state.pendingIceCandidates.splice(0);
+        for (var index = 0; index < candidates.length; index += 1) {
+            await state.pc.addIceCandidate(candidates[index]);
+        }
+    }
+
+    function isP2pEstablished() {
+        return Boolean(
+            state.pc && (state.pc.connectionState === "connected" || state.pc.connectionState === "completed") ||
+            state.controlChannel && state.controlChannel.readyState === "open" ||
+            state.fileChannel && state.fileChannel.readyState === "open"
+        );
     }
 
     document.addEventListener("DOMContentLoaded", function () {

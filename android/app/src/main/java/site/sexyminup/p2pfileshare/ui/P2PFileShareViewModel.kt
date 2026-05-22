@@ -6,109 +6,61 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
-import org.webrtc.DataChannel
 import site.sexyminup.p2pfileshare.P2PTransferForegroundService
 import site.sexyminup.p2pfileshare.data.ApiClient
-import site.sexyminup.p2pfileshare.data.ConfigResponse
-import site.sexyminup.p2pfileshare.data.RoomCreateResponse
-import site.sexyminup.p2pfileshare.data.RoomJoinResponse
 import site.sexyminup.p2pfileshare.data.SettingsRepository
-import site.sexyminup.p2pfileshare.signaling.SignalingClient
-import site.sexyminup.p2pfileshare.signaling.WsMessage
-import site.sexyminup.p2pfileshare.transfer.AckMessage
-import site.sexyminup.p2pfileshare.transfer.ErrorMessage
+import site.sexyminup.p2pfileshare.data.StoredEntryCreate
+import site.sexyminup.p2pfileshare.data.StoredEntryResponse
+import site.sexyminup.p2pfileshare.data.StoredTransferCreateResponse
+import site.sexyminup.p2pfileshare.data.StoredTransferJoinResponse
 import site.sexyminup.p2pfileshare.transfer.FileMetadata
-import site.sexyminup.p2pfileshare.transfer.ManifestMessage
-import site.sexyminup.p2pfileshare.transfer.ReceiverCompleteMessage
-import site.sexyminup.p2pfileshare.transfer.SenderFinishedMessage
-import site.sexyminup.p2pfileshare.transfer.END_OF_ARCHIVE_BYTES
 import site.sexyminup.p2pfileshare.transfer.TransferErrorCodes
-import site.sexyminup.p2pfileshare.transfer.chunkCount
-import site.sexyminup.p2pfileshare.transfer.encodeAck
-import site.sexyminup.p2pfileshare.transfer.encodeError
-import site.sexyminup.p2pfileshare.transfer.encodeManifest
-import site.sexyminup.p2pfileshare.transfer.encodeReceiverComplete
-import site.sexyminup.p2pfileshare.transfer.encodeSenderFinished
-import site.sexyminup.p2pfileshare.transfer.messageType
 import site.sexyminup.p2pfileshare.transfer.queryFileMetadata
-import site.sexyminup.p2pfileshare.transfer.resolveDataChannelChunkSize
-import site.sexyminup.p2pfileshare.transfer.roundUpToTarBlock
 import site.sexyminup.p2pfileshare.transfer.tarArchiveName
-import site.sexyminup.p2pfileshare.transfer.tarArchiveSize
-import site.sexyminup.p2pfileshare.transfer.tarEntryPath
-import site.sexyminup.p2pfileshare.transfer.tarHeader
-import site.sexyminup.p2pfileshare.transfer.paxRecords
-import site.sexyminup.p2pfileshare.webrtc.WebRtcManager
 import java.io.InputStream
-import java.io.OutputStream
-import java.nio.ByteBuffer
-import java.util.UUID
-import kotlin.math.max
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 
 class P2PFileShareViewModel(application: Application) : AndroidViewModel(application) {
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = false
     }
-    private val httpClient = OkHttpClient.Builder().build()
-    private val apiClient = ApiClient(httpClient, json)
-    private val signalingClient = SignalingClient(httpClient, json)
+    private val apiClient = ApiClient(OkHttpClient.Builder().build(), json)
     private val settingsRepository = SettingsRepository(application)
     private val contentResolver = application.contentResolver
     private val _uiState = MutableStateFlow(TransferUiState())
     val uiState: StateFlow<TransferUiState> = _uiState.asStateFlow()
 
-    private var config: ConfigResponse? = null
-    private var room: RoomCreateResponse? = null
-    private var receiveRoom: RoomJoinResponse? = null
-    private var webRtcManager: WebRtcManager? = null
-    private var controlChannel: DataChannel? = null
-    private var fileChannel: DataChannel? = null
     private var sendFiles: List<FileMetadata> = emptyList()
-    private var transferId: String? = null
-    private var sendingStarted = false
-    private var senderFinished = false
-    private var receiverComplete = false
-    private var bytesSent = 0L
-    private var ackedBytes = 0L
-    private var chunksSent = 0L
-    private var manifest: ManifestMessage? = null
-    private var outputStream: OutputStream? = null
-    private var receiveQueue: Channel<ByteArray>? = null
-    private var receiveWriterJob: Job? = null
-    private var bytesReceived = 0L
-    private var chunkIndex = -1L
-    private var receiverSenderFinished = false
-    private var completed = false
-    private var failed = false
-    private var lastAckAt = 0L
-    private var lastProgressAt = 0L
+    private var uploadSession: StoredTransferCreateResponse? = null
+    private var receiveSession: StoredTransferJoinResponse? = null
+    private var saveUri: Uri? = null
     private var transferStartedAt = 0L
-    private var timeoutJob: Job? = null
-    private var autoResetJob: Job? = null
     private var foregroundActive = false
     private var lastForegroundUpdateAt = 0L
     private var lastForegroundStatus = ""
-    private val receiveMutex = Mutex()
+    private var autoResetJob: Job? = null
+    private var senderCompletionPollJob: Job? = null
 
     init {
         viewModelScope.launch {
             settingsRepository.serverUrl.collect { fixedUrl ->
                 _uiState.update { it.copy(serverUrl = fixedUrl, editableServerUrl = fixedUrl) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.autoResetOnComplete.collect { enabled ->
+                _uiState.update { it.copy(autoResetOnComplete = enabled) }
             }
         }
     }
@@ -136,29 +88,41 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    fun updateAutoResetOnComplete(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.saveAutoResetOnComplete(enabled)
+            _uiState.update { it.copy(autoResetOnComplete = enabled) }
+        }
+    }
+
     fun selectSendFiles(uris: List<Uri>) {
         cancelAutoReset()
+        cancelSenderCompletionPoll()
         runCatching {
             uris.distinct().map { queryFileMetadata(contentResolver, it) }
                 .also { require(it.isNotEmpty()) { "보낼 파일을 선택하세요." } }
         }.onSuccess { files ->
-                sendFiles = files
-                val payloadSize = payloadSize(files)
-                val payloadName = payloadName(files)
-                _uiState.update {
-                    it.copy(
-                        selectedFileName = payloadName,
-                        selectedFileSize = payloadSize,
-                        selectedFileMimeType = payloadMimeType(files),
-                        selectedFileCount = files.size,
-                        totalBytes = payloadSize,
-                        progressBytes = 0L,
-                        error = null,
-                        status = if (files.size == 1) "파일 선택됨" else "${files.size}개 파일 선택됨",
-                    )
-                }
+            sendFiles = files
+            uploadSession = null
+            val total = files.sumOf { it.size }
+            _uiState.update {
+                it.copy(
+                    selectedFileName = payloadName(files),
+                    selectedFileSize = total,
+                    selectedFileMimeType = payloadMimeType(files),
+                    selectedFileCount = files.size,
+                    totalBytes = total,
+                    progressBytes = 0L,
+                    error = null,
+                    errorCode = null,
+                    restartAvailable = false,
+                    status = if (files.size == 1) "파일 선택됨" else "${files.size}개 파일 선택됨",
+                )
             }
-            .onFailure { setError(it.message ?: "파일 정보를 읽지 못했습니다.") }
+            if (total > MAX_TOTAL_SIZE_BYTES) {
+                failTransfer("전체 전송 크기는 30GB를 넘을 수 없습니다.", TransferErrorCodes.SIZE_MISMATCH, restartable = false)
+            }
+        }.onFailure { setError(it.message ?: "파일 정보를 읽지 못했습니다.") }
     }
 
     fun updateCode(code: String) {
@@ -181,35 +145,124 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun createSendRoom() {
-        val files = sendFiles.takeIf { it.isNotEmpty() } ?: run {
+        if (sendFiles.isEmpty()) {
             setError("보낼 파일을 먼저 선택하세요.")
             return
         }
-        startFreshTransfer("서버 연결 중")
-        receiveRoom = null
+        uploadSession = null
+        continueUpload()
+    }
+
+    fun restartTransfer() {
+        when {
+            uploadSession != null && sendFiles.isNotEmpty() -> continueUpload()
+            receiveSession != null && saveUri != null -> startReceiving(requireNotNull(saveUri))
+            receiveSession != null -> requestSaveLocation()
+            sendFiles.isNotEmpty() -> continueUpload()
+            else -> setError("재시작할 전송이 없습니다.")
+        }
+    }
+
+    private fun continueUpload() {
+        val files = sendFiles
+        if (files.isEmpty()) return
+        val total = files.sumOf { it.size }
+        if (total > MAX_TOTAL_SIZE_BYTES) {
+            failTransfer("전체 전송 크기는 30GB를 넘을 수 없습니다.", TransferErrorCodes.SIZE_MISMATCH, restartable = false)
+            return
+        }
+        startRuntime("업로드 준비 중", total)
         viewModelScope.launch {
             runCatching {
                 val serverUrl = uiState.value.serverUrl
-                val loadedConfig = apiClient.getConfig(serverUrl)
-                config = loadedConfig
-                setStatus("방 생성 중")
-                val payloadSize = payloadSize(files)
-                val created = apiClient.createRoom(serverUrl, payloadName(files), payloadSize, payloadMimeType(files))
-                room = created
-                transferId = UUID.randomUUID().toString()
+                val session = uploadSession ?: apiClient.createStoredTransfer(
+                    serverUrl,
+                    files.map {
+                        StoredEntryCreate(
+                            relativePath = it.name,
+                            fileSize = it.size,
+                            mimeType = normalizeMimeType(it.mimeType),
+                        )
+                    },
+                ).also { uploadSession = it }
                 _uiState.update {
-                    val shareUrl = buildReceiveUrl(serverUrl, created.code)
+                    val shareUrl = buildReceiveUrl(serverUrl, session.code)
                     it.copy(
-                        roomCode = created.code,
+                        roomCode = session.code,
                         shareUrl = shareUrl,
-                        qrPayload = shareUrl,
-                        expiresAt = created.expiresAt,
-                        totalBytes = payloadSize,
+                        qrPayload = buildAndroidIntentUrl(serverUrl, session.code),
+                        expiresAt = session.expiresAt,
+                        selectedFileName = session.archiveName,
+                        selectedFileSize = session.totalSize,
+                        selectedFileMimeType = if (session.isBundle) "application/x-tar" else payloadMimeType(files),
+                        selectedFileCount = files.size,
+                        totalBytes = session.totalSize,
                     )
                 }
-                setStatus("상대 접속 대기 중")
-                connectSignaling(created.roomId, "sender")
-            }.onFailure { failTransfer(it.message ?: "방 생성 실패") }
+                uploadMissingChunks(serverUrl, session, files)
+                val completed = apiClient.completeStoredTransfer(serverUrl, session.transferId, session.uploadToken)
+                uploadSession = session.copy(expiresAt = completed.expiresAt)
+                updateProgress(completed.totalSize, completed.totalSize)
+                setStatus("코드 공유 대기 중")
+                stopForeground()
+                if (uiState.value.autoResetOnComplete) {
+                    startSenderCompletionPoll(serverUrl, session.transferId, session.uploadToken)
+                }
+            }.onFailure {
+                failTransfer(it.message ?: "업로드 실패", TransferErrorCodes.UNKNOWN, restartable = true)
+            }
+        }
+    }
+
+    private suspend fun uploadMissingChunks(
+        serverUrl: String,
+        session: StoredTransferCreateResponse,
+        files: List<FileMetadata>,
+    ) {
+        startForeground("업로드 중")
+        setStatus("업로드 중")
+        val status = apiClient.getStoredStatus(serverUrl, session.transferId, uploadToken = session.uploadToken)
+        var uploadedBytes = status.entries.sumOf { it.bytesUploaded }
+        transferStartedAt = System.nanoTime()
+        updateProgress(uploadedBytes, status.totalSize)
+        status.entries.forEachIndexed { index, entry ->
+            val file = files[index]
+            uploadEntry(serverUrl, session, entry, file) { sent ->
+                uploadedBytes += sent
+                updateProgress(uploadedBytes, status.totalSize)
+            }
+        }
+    }
+
+    private suspend fun uploadEntry(
+        serverUrl: String,
+        session: StoredTransferCreateResponse,
+        entry: StoredEntryResponse,
+        file: FileMetadata,
+        onSent: (Long) -> Unit,
+    ) {
+        val uploaded = entry.uploadedChunks.toSet()
+        withContext(Dispatchers.IO) {
+            contentResolver.openInputStream(file.uri).use { rawInput ->
+                val input = requireNotNull(rawInput) { "파일을 열 수 없습니다: ${file.name}" }
+                for (chunkIndex in 0 until entry.chunkCount) {
+                    val length = chunkLength(file.size, session.chunkSizeBytes, chunkIndex)
+                    if (chunkIndex in uploaded) {
+                        input.skipFully(length.toLong())
+                        continue
+                    }
+                    val bytes = input.readExactly(length)
+                    apiClient.uploadStoredChunk(
+                        baseUrl = serverUrl,
+                        transferId = session.transferId,
+                        entryId = entry.entryId,
+                        chunkIndex = chunkIndex,
+                        uploadToken = session.uploadToken,
+                        bytes = bytes,
+                    )
+                    onSent(bytes.size.toLong())
+                }
+            }
         }
     }
 
@@ -219,37 +272,40 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
             setError("6자리 코드를 입력하세요.")
             return
         }
-        startFreshTransfer("서버 연결 중")
-        room = null
+        startRuntime("서버 연결 중", 0L)
+        uploadSession = null
         viewModelScope.launch {
             runCatching {
-                val serverUrl = uiState.value.serverUrl
-                val loadedConfig = apiClient.getConfig(serverUrl)
-                config = loadedConfig
-                val joined = apiClient.joinRoom(serverUrl, code)
-                val receiveMimeType = normalizeMimeType(joined.mimeType)
-                receiveRoom = joined
+                val joined = apiClient.joinStoredTransfer(uiState.value.serverUrl, code)
+                receiveSession = joined
+                val receiveMimeType = if (joined.isBundle) "application/x-tar" else normalizeMimeType(joined.entries.firstOrNull()?.mimeType)
                 _uiState.update {
                     it.copy(
                         status = "저장 위치 선택 대기 중",
-                        selectedFileName = joined.fileName,
-                        selectedFileSize = joined.fileSize,
+                        selectedFileName = joined.archiveName,
+                        selectedFileSize = joined.downloadSize,
                         selectedFileMimeType = receiveMimeType,
+                        selectedFileCount = joined.entries.size,
                         receiveMimeType = receiveMimeType,
-                        totalBytes = joined.fileSize,
+                        totalBytes = joined.downloadSize,
+                        progressBytes = 0L,
+                        error = null,
+                        errorCode = null,
+                        restartAvailable = false,
                     )
                 }
-                updateForeground()
-            }.onFailure { failTransfer(it.message ?: "방 참가 실패") }
+            }.onFailure {
+                failTransfer(it.message ?: "방 참가 실패", TransferErrorCodes.UNKNOWN, restartable = true)
+            }
         }
     }
 
     fun requestSaveLocation() {
-        val joined = receiveRoom ?: run {
+        val joined = receiveSession ?: run {
             setError("먼저 6자리 코드로 받을 파일을 조회하세요.")
             return
         }
-        _uiState.update { it.copy(pendingSaveFileName = joined.fileName) }
+        _uiState.update { it.copy(pendingSaveFileName = joined.archiveName) }
     }
 
     fun consumeSavePickerRequest() {
@@ -263,664 +319,108 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                 error = message.ifBlank { "파일 선택기를 열 수 없습니다." },
                 errorCode = TransferErrorCodes.STORAGE_OPEN_FAILED,
                 pendingSaveFileName = null,
+                restartAvailable = true,
             )
         }
     }
 
     fun startReceiving(uri: Uri) {
-        val joined = receiveRoom ?: return
+        val joined = receiveSession ?: return
+        saveUri = uri
+        startRuntime("다운로드 중", joined.downloadSize)
         viewModelScope.launch {
             runCatching {
-                outputStream = withContext(Dispatchers.IO) {
-                    contentResolver.openOutputStream(uri, "w")
-                } ?: error("저장 파일을 열 수 없습니다.")
-                setStatus("상대 접속 대기 중")
-                connectSignaling(joined.roomId, "receiver")
-            }.onFailure { failTransfer(it.message ?: "수신 준비 실패", TransferErrorCodes.STORAGE_OPEN_FAILED) }
+                startForeground("다운로드 중")
+                transferStartedAt = System.nanoTime()
+                var received = 0L
+                withContext(Dispatchers.IO) {
+                    apiClient.openStoredDownload(
+                        baseUrl = uiState.value.serverUrl,
+                        transferId = joined.transferId,
+                        downloadToken = joined.downloadToken,
+                    ).use { response ->
+                        val input = requireNotNull(response.body) { "다운로드 응답이 비어 있습니다." }.byteStream()
+                        contentResolver.openOutputStream(uri, "w").use { rawOutput ->
+                            val output = requireNotNull(rawOutput) { "저장 파일을 열 수 없습니다." }
+                            val buffer = ByteArray(DOWNLOAD_BUFFER_SIZE)
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read < 0) break
+                                output.write(buffer, 0, read)
+                                received += read
+                                updateProgress(received, joined.downloadSize)
+                            }
+                            output.flush()
+                        }
+                    }
+                }
+                updateProgress(joined.downloadSize, joined.downloadSize)
+                setStatus("완료")
+                stopForeground()
+                if (uiState.value.autoResetOnComplete) scheduleAutoResetAfterComplete()
+            }.onFailure {
+                failTransfer(it.message ?: "다운로드 실패", TransferErrorCodes.UNKNOWN, restartable = true)
+            }
         }
     }
 
     fun resetTransfer() {
         cancelAutoReset()
-        timeoutJob?.cancel()
-        closeReceiveQueue(cancelWriter = true)
-        signalingClient.close()
-        webRtcManager?.close()
-        outputStream?.closeQuietly()
-        outputStream = null
-        config = null
-        room = null
-        receiveRoom = null
-        sendFiles = emptyList()
-        controlChannel = null
-        fileChannel = null
-        transferId = null
-        sendingStarted = false
-        senderFinished = false
-        receiverComplete = false
-        bytesSent = 0L
-        ackedBytes = 0L
-        chunksSent = 0L
-        manifest = null
-        bytesReceived = 0L
-        chunkIndex = -1L
-        receiverSenderFinished = false
-        completed = false
-        failed = false
-        lastAckAt = 0L
-        lastProgressAt = 0L
-        transferStartedAt = 0L
-        lastForegroundUpdateAt = 0L
-        lastForegroundStatus = ""
+        cancelSenderCompletionPoll()
         stopForeground()
+        sendFiles = emptyList()
+        uploadSession = null
+        receiveSession = null
+        saveUri = null
+        transferStartedAt = 0L
         _uiState.update {
             TransferUiState(
                 serverUrl = SettingsRepository.DEFAULT_SERVER_URL,
                 editableServerUrl = SettingsRepository.DEFAULT_SERVER_URL,
                 codeInput = it.codeInput,
+                autoResetOnComplete = it.autoResetOnComplete,
             )
         }
     }
 
-    private fun connectSignaling(roomId: String, role: String) {
-        signalingClient.connect(
-            baseUrl = uiState.value.serverUrl,
-            roomId = roomId,
-            role = role,
-            onOpen = {
-                sendSignaling(WsMessage(type = if (role == "sender") "sender-ready" else "receiver-ready"))
-                setStatus(if (role == "sender") "코드 대기 중" else "WebRTC 연결 중")
-            },
-            onClosed = {
-                if (!completed && !failed && hasActiveTransfer()) {
-                    failTransfer("signaling 연결이 전송 중 종료되었습니다.", TransferErrorCodes.SIGNALING_CLOSED)
-                } else if (!completed && !failed) {
-                    _uiState.update { it.copy(connectionState = "signaling 종료") }
-                }
-            },
-            onFailure = { failTransfer(it.message ?: "signaling 오류", TransferErrorCodes.SIGNALING_ERROR) },
-            onMessage = { message -> handleSignalingMessage(role, message) },
-        )
-    }
-
-    private fun handleSignalingMessage(role: String, message: WsMessage) {
-        viewModelScope.launch {
-            runCatching {
-                when (message.type) {
-                    "receiver-ready" -> if (role == "sender") createOffer()
-                    "offer" -> if (role == "receiver" && message.sdp != null) acceptOffer(message.sdp)
-                    "answer" -> if (role == "sender" && message.sdp != null) {
-                        webRtcManager?.setRemoteDescription(message.sdp)
-                    }
-                    "ice-candidate" -> message.candidate?.let { webRtcManager?.addIceCandidate(it) }
-                }
-            }.onFailure { failTransfer(it.message ?: "signaling 처리 실패", TransferErrorCodes.SIGNALING_ERROR) }
-        }
-    }
-
-    private suspend fun createOffer() {
-        val loadedConfig = requireNotNull(config)
-        val manager = newWebRtcManager()
-        manager.createPeerConnection(loadedConfig)
-        controlChannel = manager.createDataChannel("control").also(::registerControlChannel)
-        fileChannel = manager.createDataChannel("file").also(::registerFileChannel)
-        setStatus("WebRTC 연결 중")
-        val offer = manager.createOffer()
-        sendSignaling(WsMessage(type = "offer", sdp = offer))
-    }
-
-    private suspend fun acceptOffer(sdp: site.sexyminup.p2pfileshare.signaling.SessionDescriptionDto) {
-        val loadedConfig = requireNotNull(config)
-        val manager = newWebRtcManager()
-        manager.createPeerConnection(loadedConfig)
-        manager.setRemoteDescription(sdp)
-        val answer = manager.createAnswer()
-        sendSignaling(WsMessage(type = "answer", sdp = answer))
-    }
-
-    private fun newWebRtcManager(): WebRtcManager {
-        val manager = WebRtcManager(
-            context = getApplication(),
-            onIceCandidate = { sendSignaling(WsMessage(type = "ice-candidate", candidate = it)) },
-            onConnectionState = { state ->
-                _uiState.update { it.copy(connectionState = state, status = state.toKoreanConnectionStatus()) }
-                updateForeground()
-                if (state == "FAILED" || state == "CLOSED") {
-                    failTransfer("WebRTC 연결이 전송 중 끊어졌습니다.", TransferErrorCodes.PEER_CONNECTION_FAILED)
-                } else if (state == "CONNECTED" || state == "COMPLETED") {
-                    _uiState.update { it.copy(pathStatus = "직접/TURN 확인 중") }
-                    webRtcManager?.reportConnectionPath { direct, turn ->
-                        _uiState.update {
-                            it.copy(
-                                pathStatus = when {
-                                    turn == true -> "TURN 중계 가능성 있음"
-                                    direct == true -> "직접 연결됨"
-                                    else -> "직접/TURN 확인 불가"
-                                },
-                            )
-                        }
-                        sendSignaling(
-                            WsMessage(
-                                type = "connection-info",
-                                role = if (room != null) "sender" else "receiver",
-                                directP2p = direct,
-                                turnUsed = turn,
-                            ),
-                        )
-                    }
-                }
-            },
-            onDataChannel = { channel ->
-                if (channel.label() == "control") {
-                    controlChannel = channel.also(::registerControlChannel)
-                } else if (channel.label() == "file") {
-                    fileChannel = channel.also(::registerFileChannel)
-                }
-            },
-        )
-        webRtcManager = manager
-        return manager
-    }
-
-    private fun registerControlChannel(channel: DataChannel) {
-        channel.registerObserver(
-            object : DataChannel.Observer {
-                override fun onBufferedAmountChange(previousAmount: Long) = Unit
-                override fun onStateChange() {
-                    runCatching {
-                        if (channel.state() == DataChannel.State.OPEN && room != null) {
-                            sendManifest()
-                        }
-                    }.onFailure {
-                        failTransfer(it.message ?: "control DataChannel 상태 처리 실패", TransferErrorCodes.UNKNOWN)
-                    }
-                }
-
-                override fun onMessage(buffer: DataChannel.Buffer) {
-                    runCatching {
-                        val data = buffer.data.copyRemainingBytes()
-                        handleControlMessage(data.decodeToString())
-                    }.onFailure {
-                        failTransfer(it.message ?: "control 메시지 수신 실패", TransferErrorCodes.UNKNOWN)
-                    }
-                }
-            },
-        )
-    }
-
-    private fun registerFileChannel(channel: DataChannel) {
-        channel.registerObserver(
-            object : DataChannel.Observer {
-                override fun onBufferedAmountChange(previousAmount: Long) = Unit
-                override fun onStateChange() {
-                    runCatching {
-                        if (channel.state() == DataChannel.State.CLOSED) {
-                            handleFileChannelClosed()
-                        }
-                    }.onFailure {
-                        failTransfer(it.message ?: "file DataChannel 상태 처리 실패", TransferErrorCodes.DATA_CHANNEL_CLOSED)
-                    }
-                }
-                override fun onMessage(buffer: DataChannel.Buffer) {
-                    runCatching {
-                        if (!buffer.binary) return
-                        enqueueReceivedChunk(buffer.data.copyRemainingBytes())
-                    }.onFailure {
-                        failTransfer(it.message ?: "file chunk 수신 실패", TransferErrorCodes.UNKNOWN)
-                    }
-                }
-            },
-        )
-    }
-
-    private fun sendManifest() {
-        val files = sendFiles
-        if (files.isEmpty()) return
-        val channel = controlChannel ?: return
-        val chunkSize = resolveChunkSize()
-        val payloadSize = payloadSize(files)
-        val manifest = ManifestMessage(
-            transferId = requireNotNull(transferId),
-            fileName = payloadName(files),
-            fileSize = payloadSize,
-            mimeType = payloadMimeType(files),
-            chunkSize = chunkSize,
-            chunkCount = chunkCount(payloadSize, chunkSize),
-        )
-        if (!channel.safeSendText(json.encodeManifest(manifest))) {
-            failTransfer("control DataChannel로 manifest를 보낼 수 없습니다.", TransferErrorCodes.DATA_CHANNEL_CLOSED)
-        }
-    }
-
-    private fun handleControlMessage(text: String) {
-        viewModelScope.launch {
-            runCatching {
-                when (json.messageType(text)) {
-                    "manifest" -> handleManifest(json.decodeFromString<ManifestMessage>(text))
-                    "ack" -> handleAck(json.decodeFromString<AckMessage>(text))
-                    "sender-finished", "complete" -> handleSenderFinished(json.decodeFromString<SenderFinishedMessage>(text))
-                    "receiver-complete" -> handleReceiverComplete(json.decodeFromString<ReceiverCompleteMessage>(text))
-                    "error" -> json.decodeFromString<ErrorMessage>(text).let {
-                        failTransfer(it.message, it.code.ifBlank { TransferErrorCodes.REMOTE_ERROR })
-                    }
-                }
-            }.onFailure { failTransfer(it.message ?: "control 메시지 처리 실패", TransferErrorCodes.UNKNOWN) }
-        }
-    }
-
-    private suspend fun handleManifest(message: ManifestMessage) {
-        val joined = receiveRoom ?: return
-        if (message.fileSize != joined.fileSize) {
-            failTransfer("파일 크기 metadata가 일치하지 않습니다.", TransferErrorCodes.METADATA_MISMATCH)
-            return
-        }
-        manifest = message
-        bytesReceived = 0L
-        chunkIndex = -1L
-        receiverSenderFinished = false
-        transferStartedAt = System.nanoTime()
-        _uiState.update { it.copy(status = "전송 중", totalBytes = message.fileSize, progressBytes = 0L) }
-        startForeground("전송 중")
-        updateForeground()
-        startReceiveWriter(message.fileSize)
-        sendSignaling(WsMessage(type = "transfer-started"))
-        sendAck(initial = true)
-    }
-
-    private suspend fun handleAck(message: AckMessage) {
-        ackedBytes = max(ackedBytes, message.receivedBytes)
-        updateProgress(ackedBytes, sendFiles.takeIf { it.isNotEmpty() }?.let(::payloadSize) ?: 0L)
-        if (message.receivedBytes == 0L && !sendingStarted) {
-            runCatching { sendFileChunks() }
-                .onFailure { failTransfer(it.message ?: "DataChannel 전송 실패", TransferErrorCodes.DATA_CHANNEL_TIMEOUT) }
-        } else if (senderFinished && !receiverComplete) {
-            setStatus("수신 완료 확인 대기 중")
-        }
-    }
-
-    private fun handleSenderFinished(message: SenderFinishedMessage) {
-        receiverSenderFinished = true
-        val expected = manifest?.fileSize ?: receiveRoom?.fileSize ?: 0L
-        if (message.totalBytes != expected) {
-            failTransfer("송신자가 보고한 전체 크기가 원본 파일 크기와 일치하지 않습니다.", TransferErrorCodes.SIZE_MISMATCH)
-            return
-        }
-        if (bytesReceived < expected) {
-            setStatus("남은 데이터 대기 중")
-            scheduleMissingDataTimeout()
-        }
-        viewModelScope.launch { maybeFinalizeReceive() }
-    }
-
-    private fun handleReceiverComplete(message: ReceiverCompleteMessage) {
-        val expected = sendFiles.takeIf { it.isNotEmpty() }?.let(::payloadSize) ?: return
-        if (message.totalBytes != expected) {
-            failTransfer("수신 완료 크기가 원본과 일치하지 않습니다.", TransferErrorCodes.SIZE_MISMATCH)
-            return
-        }
-        receiverComplete = true
-        completed = true
-        updateProgress(expected, expected)
-        setStatus("완료")
-        stopForeground()
-        scheduleAutoResetAfterComplete()
-    }
-
-    private suspend fun sendFileChunks() {
-        val files = sendFiles
-        if (files.isEmpty()) return
-        val fileChannel = fileChannel ?: error("file DataChannel이 준비되지 않았습니다.")
-        val expected = payloadSize(files)
-        sendingStarted = true
-        transferStartedAt = System.nanoTime()
-        bytesSent = 0L
-        chunksSent = 0L
-        ackedBytes = 0L
-        _uiState.update { it.copy(status = "전송 중", progressBytes = 0L, totalBytes = expected) }
-        startForeground("전송 중")
-        updateForeground()
-        sendSignaling(WsMessage(type = "transfer-started"))
-        waitForDataChannelOpen(fileChannel)
-        val chunkSize = resolveChunkSize()
-        if (files.size == 1) {
-            withContext(Dispatchers.IO) {
-                contentResolver.openInputStream(files.first().uri).use { input ->
-                    requireNotNull(input) { "파일을 열 수 없습니다." }
-                    readAndSend(input, fileChannel, chunkSize)
-                }
-            }
-        } else {
-            sendTarBundle(files, fileChannel, chunkSize)
-        }
-        setStatus("전송 버퍼 비우는 중")
-        waitForDrain(fileChannel, lowWaterBytes(chunkSize), timeoutMs = activeTimeoutMs())
-        senderFinished = true
-        controlChannel?.safeSendText(
-            json.encodeSenderFinished(
-                SenderFinishedMessage(
-                    transferId = requireNotNull(transferId),
-                    totalBytes = expected,
-                    lastChunkIndex = chunksSent - 1,
-                ),
-            ),
-        )
-        setStatus("수신 완료 확인 대기 중")
-    }
-
-    private suspend fun readAndSend(input: InputStream, channel: DataChannel, chunkSize: Int) {
-        val buffer = ByteArray(chunkSize)
-        while (true) {
-            waitForSendBuffer(channel, chunkSize, timeoutMs = activeTimeoutMs())
-            val read = input.read(buffer)
-            if (read < 0) break
-            val payload = if (read == buffer.size) buffer.copyOf() else buffer.copyOf(read)
-            sendPayloadBytes(channel, payload, chunkSize)
-        }
-    }
-
-    private suspend fun sendTarBundle(files: List<FileMetadata>, channel: DataChannel, chunkSize: Int) {
-        files.forEachIndexed { index, file ->
-            val path = tarEntryPath(file.name, index)
-            val paxData = paxRecords(path, file.size)
-            sendPayloadBytes(channel, tarHeader("PaxHeaders.${index + 1}", paxData.size.toLong(), 'x'.code.toByte()), chunkSize)
-            sendPayloadBytes(channel, paxData, chunkSize)
-            sendZeroPadding(channel, paxData.size.toLong(), chunkSize)
-            sendPayloadBytes(channel, tarHeader(path, file.size), chunkSize)
-            withContext(Dispatchers.IO) {
-                contentResolver.openInputStream(file.uri).use { input ->
-                    requireNotNull(input) { "파일을 열 수 없습니다: ${file.name}" }
-                    readAndSend(input, channel, chunkSize)
-                }
-            }
-            sendZeroPadding(channel, file.size, chunkSize)
-        }
-        sendPayloadBytes(channel, ByteArray(END_OF_ARCHIVE_BYTES.toInt()), chunkSize)
-    }
-
-    private suspend fun sendZeroPadding(channel: DataChannel, byteCount: Long, chunkSize: Int) {
-        val padding = byteCount.roundUpToTarBlock() - byteCount
-        var remaining = padding
-        while (remaining > 0L) {
-            val size = minOf(chunkSize.toLong(), remaining).toInt()
-            sendPayloadBytes(channel, ByteArray(size), chunkSize)
-            remaining -= size
-        }
-    }
-
-    private suspend fun sendPayloadBytes(channel: DataChannel, data: ByteArray, chunkSize: Int) {
-        var offset = 0
-        while (offset < data.size) {
-            val count = minOf(chunkSize, data.size - offset)
-            val payload = if (offset == 0 && count == data.size) data else data.copyOfRange(offset, offset + count)
-            sendBinaryChunk(channel, payload, chunkSize, timeoutMs = activeTimeoutMs())
-            bytesSent += count
-            chunksSent += 1
-            sendPeriodicSenderProgress()
-            offset += count
-        }
-    }
-
-    private fun sendPeriodicSenderProgress() {
-        val now = System.currentTimeMillis()
-        if (now - lastProgressAt >= 1000L) {
-            lastProgressAt = now
-            sendSignaling(WsMessage(type = "transfer-progress", bytesSent = bytesSent))
-        }
-    }
-
-    private suspend fun writeReceivedChunk(data: ByteArray) {
-        receiveMutex.withLock {
-            if (completed || failed) return
-            val expected = manifest?.fileSize ?: return
-            if (bytesReceived + data.size > expected) {
-                failTransfer(sizeFailureMessage(expected, bytesReceived + data.size), TransferErrorCodes.SIZE_MISMATCH)
-                return
-            }
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    outputStream?.write(data) ?: error("저장 파일이 열려 있지 않습니다.")
-                }
-            }.onFailure {
-                failTransfer(it.message ?: "저장 파일 쓰기 실패", TransferErrorCodes.STORAGE_WRITE_FAILED)
-                return
-            }
-            bytesReceived += data.size
-            chunkIndex += 1
-            updateProgress(bytesReceived, expected)
-            sendPeriodicAck()
-            val now = System.currentTimeMillis()
-            if (now - lastProgressAt >= 1000L) {
-                lastProgressAt = now
-                sendSignaling(WsMessage(type = "transfer-progress", bytesReceived = bytesReceived))
-            }
-            if (receiverSenderFinished && bytesReceived < expected) {
-                scheduleMissingDataTimeout()
-            }
-            maybeFinalizeReceive()
-        }
-    }
-
-    private suspend fun maybeFinalizeReceive() {
-        if (completed || failed || !receiverSenderFinished) return
-        val currentManifest = manifest ?: return
-        if (bytesReceived != currentManifest.fileSize) return
-        timeoutJob?.cancel()
-        setStatus("검증 중")
-        runCatching {
-            withContext(Dispatchers.IO) {
-                outputStream?.flush()
-                outputStream?.close()
-            }
-        }.onFailure {
-            failTransfer(it.message ?: "저장 파일 닫기 실패", TransferErrorCodes.STORAGE_CLOSE_FAILED)
-            return
-        }
-        outputStream = null
-        completed = true
-        updateProgress(bytesReceived, currentManifest.fileSize)
-        controlChannel?.safeSendText(
-            json.encodeReceiverComplete(
-                ReceiverCompleteMessage(
-                    transferId = currentManifest.transferId,
-                    totalBytes = bytesReceived,
-                    lastChunkIndex = chunkIndex,
-                ),
-            ),
-        )
-        closeReceiveQueue(cancelWriter = false)
-        sendSignaling(
-            WsMessage(
-                type = "transfer-completed",
-                totalBytes = bytesReceived,
-                directP2p = uiState.value.pathStatus == "직접 연결됨",
-                turnUsed = uiState.value.pathStatus == "TURN 중계 가능성 있음",
-            ),
-        )
-        setStatus("완료")
-        stopForeground()
-    }
-
-    private fun sendPeriodicAck() {
-        val now = System.currentTimeMillis()
-        if (now - lastAckAt >= 1000L || chunkIndex % ACK_CHUNK_INTERVAL == 0L || bytesReceived == (manifest?.fileSize ?: -1L)) {
-            sendAck(initial = false)
-            lastAckAt = now
-        }
-    }
-
-    private fun sendAck(initial: Boolean) {
-        val currentManifest = manifest
-        controlChannel?.safeSendText(
-            json.encodeAck(
-                AckMessage(
-                    transferId = currentManifest?.transferId,
-                    receivedBytes = if (initial) 0L else bytesReceived,
-                    lastChunkIndex = chunkIndex,
-                ),
-            ),
-        )
-    }
-
-    private fun scheduleMissingDataTimeout() {
-        timeoutJob?.cancel()
-        timeoutJob = viewModelScope.launch {
-            delay(activeTimeoutMs())
-            val expected = manifest?.fileSize ?: return@launch
-            if (!completed && bytesReceived < expected) {
-                failTransfer(sizeFailureMessage(expected, bytesReceived), TransferErrorCodes.TRANSFER_TIMEOUT)
-            }
-        }
-    }
-
-    private fun handleFileChannelClosed() {
-        if (completed || failed) return
-        val expected = manifest?.fileSize ?: sendFiles.takeIf { it.isNotEmpty() }?.let(::payloadSize) ?: return
-        val current = if (manifest != null) bytesReceived else ackedBytes
-        if (current >= expected) return
-        if (receiverSenderFinished) {
-            setStatus("남은 데이터 대기 중")
-            scheduleMissingDataTimeout()
-        } else {
-            failTransfer(sizeFailureMessage(expected, current), TransferErrorCodes.DATA_CHANNEL_CLOSED)
-        }
-    }
-
-    private fun hasActiveTransfer(): Boolean =
-        sendingStarted || manifest != null || bytesReceived > 0L || ackedBytes > 0L
-
-    private fun startReceiveWriter(expectedSize: Long) {
-        if (outputStream == null) {
-            failTransfer("저장 파일이 열려 있지 않습니다.", TransferErrorCodes.STORAGE_OPEN_FAILED)
-            return
-        }
-        closeReceiveQueue(cancelWriter = true)
-        val queue = Channel<ByteArray>(RECEIVE_QUEUE_CAPACITY)
-        receiveQueue = queue
-        receiveWriterJob = viewModelScope.launch {
-            runCatching {
-                for (chunk in queue) {
-                    writeReceivedChunk(chunk)
-                    if (completed || failed || bytesReceived >= expectedSize) break
-                }
-            }.onFailure {
-                if (!completed && !failed) {
-                    failTransfer(it.message ?: "수신 파일 저장 처리 실패", TransferErrorCodes.STORAGE_WRITE_FAILED)
-                }
-            }
-        }
-    }
-
-    private fun enqueueReceivedChunk(data: ByteArray) {
-        if (completed || failed) return
-        val queue = receiveQueue ?: run {
-            failTransfer("수신 저장 큐가 준비되지 않았습니다.", TransferErrorCodes.DATA_CHANNEL_CLOSED)
-            return
-        }
-        if (queue.trySend(data).isSuccess) {
-            return
-        }
-        runCatching {
-            runBlocking {
-                withTimeout(activeTimeoutMs()) {
-                    queue.send(data)
-                }
-            }
-        }.onFailure {
-            failTransfer(
-                "수신 저장 속도가 전송 속도를 따라가지 못해 대기 시간이 초과되었습니다.",
-                TransferErrorCodes.RECEIVE_QUEUE_FULL,
-            )
-        }
-    }
-
-    private fun closeReceiveQueue(cancelWriter: Boolean) {
-        receiveQueue?.close()
-        receiveQueue = null
-        if (cancelWriter) {
-            receiveWriterJob?.cancel()
-        }
-        receiveWriterJob = null
-    }
-
-    private fun failTransfer(message: String, code: String = TransferErrorCodes.UNKNOWN) {
-        if (completed || failed) return
+    private fun startRuntime(status: String, totalBytes: Long) {
         cancelAutoReset()
-        failed = true
-        timeoutJob?.cancel()
-        controlChannel?.safeSendText(json.encodeError(ErrorMessage(transferId = transferId ?: manifest?.transferId, code = code, message = message)))
-        sendSignaling(WsMessage(type = "transfer-failed", errorCode = code, reason = message))
-        closeReceiveQueue(cancelWriter = true)
-        outputStream?.closeQuietly()
-        outputStream = null
-        _uiState.update { it.copy(status = "실패", error = message, errorCode = code) }
-        updateForeground()
-        stopForeground()
-    }
-
-    private fun setError(message: String) {
-        _uiState.update { it.copy(error = message, errorCode = null) }
-    }
-
-    private fun startFreshTransfer(status: String) {
-        cancelAutoReset()
-        timeoutJob?.cancel()
-        closeReceiveQueue(cancelWriter = true)
-        signalingClient.close()
-        webRtcManager?.close()
-        outputStream?.closeQuietly()
-        outputStream = null
-        stopForeground()
-        controlChannel = null
-        fileChannel = null
-        transferId = null
-        sendingStarted = false
-        senderFinished = false
-        receiverComplete = false
-        bytesSent = 0L
-        ackedBytes = 0L
-        chunksSent = 0L
-        manifest = null
-        bytesReceived = 0L
-        chunkIndex = -1L
-        receiverSenderFinished = false
-        completed = false
-        failed = false
+        cancelSenderCompletionPoll()
         _uiState.update {
             it.copy(
                 status = status,
                 error = null,
                 errorCode = null,
+                restartAvailable = false,
                 progressBytes = 0L,
+                totalBytes = totalBytes,
                 speedBytesPerSecond = 0.0,
                 etaSeconds = Double.NaN,
-                roomCode = null,
-                shareUrl = null,
-                qrPayload = null,
-                expiresAt = null,
-                pathStatus = "대기 중",
-                connectionState = "대기 중",
+                pathStatus = "Pi 임시 저장",
+                connectionState = "HTTP",
+                roomCode = if (status.startsWith("업로드")) it.roomCode else null,
+                shareUrl = if (status.startsWith("업로드")) it.shareUrl else null,
+                qrPayload = if (status.startsWith("업로드")) it.qrPayload else null,
             )
         }
         lastForegroundUpdateAt = 0L
         lastForegroundStatus = ""
-        foregroundActive = false
     }
 
-    private fun scheduleAutoResetAfterComplete() {
-        val completedTransferId = transferId
-        cancelAutoReset()
-        autoResetJob = viewModelScope.launch {
-            delay(AUTO_RESET_DELAY_MS)
-            if (completed && !failed && transferId == completedTransferId) {
-                autoResetJob = null
-                resetTransfer()
-            }
+    private fun failTransfer(message: String, code: String, restartable: Boolean) {
+        stopForeground()
+        _uiState.update {
+            it.copy(
+                status = "실패",
+                error = message,
+                errorCode = code,
+                restartAvailable = restartable,
+            )
         }
     }
 
-    private fun cancelAutoReset() {
-        autoResetJob?.cancel()
-        autoResetJob = null
+    private fun setError(message: String) {
+        _uiState.update { it.copy(error = message, errorCode = null) }
     }
 
     private fun setStatus(status: String) {
@@ -992,19 +492,64 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         runCatching { P2PTransferForegroundService.stop(getApplication()) }
     }
 
+    private fun scheduleAutoResetAfterComplete() {
+        cancelAutoReset()
+        autoResetJob = viewModelScope.launch {
+            delay(AUTO_RESET_DELAY_MS)
+            autoResetJob = null
+            resetTransfer()
+        }
+    }
+
+    private fun cancelAutoReset() {
+        autoResetJob?.cancel()
+        autoResetJob = null
+    }
+
+    private fun startSenderCompletionPoll(serverUrl: String, transferId: String, uploadToken: String) {
+        cancelSenderCompletionPoll()
+        senderCompletionPollJob = viewModelScope.launch {
+            while (true) {
+                delay(5_000L)
+                val missing = runCatching {
+                    apiClient.getStoredStatus(serverUrl, transferId, uploadToken = uploadToken)
+                }.fold(
+                    onSuccess = { false },
+                    onFailure = { error ->
+                        val message = error.message.orEmpty()
+                        message.contains("not found", ignoreCase = true) ||
+                            message.contains("expired", ignoreCase = true)
+                    },
+                )
+                if (missing) {
+                    senderCompletionPollJob = null
+                    if (uiState.value.autoResetOnComplete) {
+                        scheduleAutoResetAfterComplete()
+                    }
+                    break
+                }
+            }
+        }
+    }
+
+    private fun cancelSenderCompletionPoll() {
+        senderCompletionPollJob?.cancel()
+        senderCompletionPollJob = null
+    }
+
     private fun buildReceiveUrl(serverUrl: String, code: String): String =
         "${serverUrl.trimEnd('/')}/receive?code=$code"
+
+    private fun buildAndroidIntentUrl(serverUrl: String, code: String): String {
+        val fallback = URLEncoder.encode(buildReceiveUrl(serverUrl, code), StandardCharsets.UTF_8.name())
+        return "intent://receive?code=$code#Intent;scheme=sendhoney;package=site.sexyminup.p2pfileshare;S.browser_fallback_url=$fallback;end"
+    }
 
     private fun payloadName(files: List<FileMetadata>): String =
         if (files.size == 1) files.first().name else tarArchiveName(files.size)
 
-    private fun payloadSize(files: List<FileMetadata>): Long =
-        if (files.size == 1) files.first().size else tarArchiveSize(files)
-
     private fun payloadMimeType(files: List<FileMetadata>): String =
         if (files.size == 1) normalizeMimeType(files.first().mimeType) else "application/x-tar"
-
-    private fun resolveChunkSize(): Int = resolveDataChannelChunkSize(config?.chunkSizeBytes)
 
     private fun normalizeMimeType(value: String?): String {
         val normalized = value.orEmpty().trim().lowercase()
@@ -1015,92 +560,47 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    private fun activeTimeoutMs(): Long =
-        ((config?.activeTransferIdleTimeoutSeconds ?: 180).coerceAtLeast(1) * 1000L)
-
-    private suspend fun waitForDataChannelOpen(channel: DataChannel) {
-        while (channel.state() == DataChannel.State.CONNECTING) delay(25)
-        if (channel.state() != DataChannel.State.OPEN) error("DataChannel이 열리지 않았습니다.")
+    private fun chunkLength(fileSize: Long, chunkSize: Int, chunkIndex: Int): Int {
+        val start = chunkIndex.toLong() * chunkSize.toLong()
+        return minOf(chunkSize.toLong(), fileSize - start).toInt()
     }
 
-    private fun lowWaterBytes(chunkSize: Int): Long =
-        maxOf(chunkSize.toLong() * 4L, LOW_WATER_BYTES)
-
-    private fun highWaterBytes(chunkSize: Int): Long =
-        maxOf(lowWaterBytes(chunkSize) + chunkSize.toLong(), HIGH_WATER_BYTES)
-
-    private suspend fun waitForSendBuffer(channel: DataChannel, chunkSize: Int, timeoutMs: Long) {
-        if (channel.bufferedAmount() <= highWaterBytes(chunkSize)) return
-        waitForBufferBelow(channel, lowWaterBytes(chunkSize), timeoutMs)
-    }
-
-    private suspend fun waitForBufferBelow(channel: DataChannel, threshold: Long, timeoutMs: Long) {
-        val started = System.currentTimeMillis()
-        while (channel.bufferedAmount() > threshold) {
-            if (channel.state() != DataChannel.State.OPEN) error("DataChannel이 열려 있지 않습니다: ${channel.state()}")
-            if (System.currentTimeMillis() - started > timeoutMs) error("DataChannel backpressure timeout")
-            delay(20)
+    private fun InputStream.readExactly(size: Int): ByteArray {
+        val buffer = ByteArray(size)
+        var offset = 0
+        while (offset < size) {
+            val read = read(buffer, offset, size - offset)
+            if (read < 0) error("파일을 읽는 중 끝에 도달했습니다.")
+            offset += read
         }
+        return buffer
     }
 
-    private suspend fun waitForDrain(channel: DataChannel, threshold: Long, timeoutMs: Long) =
-        waitForBufferBelow(channel, threshold, timeoutMs)
-
-    private suspend fun sendBinaryChunk(channel: DataChannel, payload: ByteArray, chunkSize: Int, timeoutMs: Long) {
-        val started = System.currentTimeMillis()
-        while (true) {
-            waitForSendBuffer(channel, chunkSize, remainingTimeout(started, timeoutMs))
-            if (channel.state() != DataChannel.State.OPEN) error("DataChannel이 열려 있지 않습니다: ${channel.state()}")
-            if (channel.send(DataChannel.Buffer(ByteBuffer.wrap(payload), true))) return
-            if (System.currentTimeMillis() - started > timeoutMs) error("DataChannel send queue is full")
-            delay(20)
+    private fun InputStream.skipFully(size: Long) {
+        var remaining = size
+        val scratch = ByteArray(64 * 1024)
+        while (remaining > 0L) {
+            val skipped = skip(remaining)
+            if (skipped > 0L) {
+                remaining -= skipped
+                continue
+            }
+            val read = read(scratch, 0, minOf(scratch.size.toLong(), remaining).toInt())
+            if (read < 0) error("파일을 건너뛰는 중 끝에 도달했습니다.")
+            remaining -= read
         }
-    }
-
-    private fun remainingTimeout(started: Long, timeoutMs: Long): Long =
-        (timeoutMs - (System.currentTimeMillis() - started)).coerceAtLeast(1L)
-
-    private fun sendSignaling(message: WsMessage) {
-        runCatching { signalingClient.send(message) }
-    }
-
-    private fun DataChannel.safeSendText(text: String): Boolean =
-        state() == DataChannel.State.OPEN &&
-            runCatching { send(DataChannel.Buffer(ByteBuffer.wrap(text.encodeToByteArray()), false)) }
-                .getOrDefault(false)
-
-    private fun ByteBuffer.copyRemainingBytes(): ByteArray {
-        val copy = slice()
-        return ByteArray(copy.remaining()).also(copy::get)
-    }
-
-    private fun String.toKoreanConnectionStatus(): String = when (this) {
-        "NEW", "CHECKING" -> "WebRTC 연결 중"
-        "CONNECTED", "COMPLETED" -> "연결됨"
-        "FAILED" -> "실패"
-        "DISCONNECTED", "CLOSED" -> "연결 종료"
-        else -> this
-    }
-
-    private fun sizeFailureMessage(expected: Long, received: Long): String {
-        val missing = max(0L, expected - received)
-        return "받은 파일 크기가 원본 파일 크기와 일치하지 않습니다. expected size: $expected, received size: $received, missing bytes: $missing"
-    }
-
-    private fun OutputStream.closeQuietly() {
-        runCatching { close() }
     }
 
     override fun onCleared() {
-        resetTransfer()
+        cancelAutoReset()
+        cancelSenderCompletionPoll()
+        stopForeground()
         super.onCleared()
     }
 
     private companion object {
-        const val HIGH_WATER_BYTES = 4L * 1024L * 1024L
-        const val LOW_WATER_BYTES = 1024L * 1024L
-        const val ACK_CHUNK_INTERVAL = 64
-        const val RECEIVE_QUEUE_CAPACITY = 512
+        const val MAX_TOTAL_SIZE_BYTES = 30L * 1024L * 1024L * 1024L
+        const val DOWNLOAD_BUFFER_SIZE = 256 * 1024
         const val FOREGROUND_UPDATE_INTERVAL_MS = 500L
         const val AUTO_RESET_DELAY_MS = 2000L
     }

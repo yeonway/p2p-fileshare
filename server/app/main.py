@@ -19,6 +19,7 @@ from .db import init_db
 from .models import QrSvgRequest
 from .rooms import router as rooms_router
 from .signaling import router as signaling_router
+from .stored import router as stored_router
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -44,8 +45,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_methods=["GET", "POST", "PUT"],
+    allow_headers=["Content-Type", "Authorization", "X-Upload-Token", "X-Download-Token", "Range"],
+    expose_headers=["Content-Length", "Content-Range", "Content-Disposition", "Accept-Ranges"],
 )
 app.mount("/static", StaticFiles(directory=APP_ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=APP_ROOT / "templates")
@@ -145,6 +147,17 @@ def receive_page(request: Request):
     return templates.TemplateResponse(request, "receive.html")
 
 
+@app.get("/p2p/send", response_class=HTMLResponse)
+def p2p_send_page(request: Request):
+    return templates.TemplateResponse(request, "p2p_send.html")
+
+
+@app.get("/p2p/receive", response_class=HTMLResponse)
+def p2p_receive_page(request: Request):
+    return templates.TemplateResponse(request, "p2p_receive.html")
+
+
 app.include_router(rooms_router)
 app.include_router(signaling_router)
+app.include_router(stored_router)
 app.include_router(admin_router)

@@ -50,6 +50,57 @@ CREATE TABLE IF NOT EXISTS security_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_security_events_created_at ON security_events(created_at);
+
+CREATE TABLE IF NOT EXISTS stored_transfers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transfer_id TEXT UNIQUE NOT NULL,
+    room_code_hash TEXT NOT NULL,
+    upload_token_hash TEXT NOT NULL,
+    download_token_hash TEXT,
+    sender_ip_hash TEXT,
+    receiver_ip_hash TEXT,
+    sender_client_type TEXT,
+    receiver_client_type TEXT,
+    archive_name TEXT,
+    total_size INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    chunk_size INTEGER NOT NULL,
+    is_bundle BOOLEAN NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    upload_completed_at TEXT,
+    download_started_at TEXT,
+    download_completed_at TEXT,
+    fail_reason TEXT,
+    user_agent_sender TEXT,
+    user_agent_receiver TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_stored_transfers_code_hash ON stored_transfers(room_code_hash);
+CREATE INDEX IF NOT EXISTS idx_stored_transfers_status ON stored_transfers(status);
+CREATE INDEX IF NOT EXISTS idx_stored_transfers_updated_at ON stored_transfers(updated_at);
+CREATE INDEX IF NOT EXISTS idx_stored_transfers_expires_at ON stored_transfers(expires_at);
+
+CREATE TABLE IF NOT EXISTS stored_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transfer_id TEXT NOT NULL,
+    entry_id TEXT NOT NULL,
+    relative_path TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    mime_type TEXT,
+    chunk_count INTEGER NOT NULL,
+    uploaded_chunks TEXT NOT NULL,
+    bytes_uploaded INTEGER NOT NULL,
+    completed BOOLEAN NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(transfer_id, entry_id),
+    FOREIGN KEY (transfer_id) REFERENCES stored_transfers(transfer_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_stored_entries_transfer_id ON stored_entries(transfer_id);
 """
 
 

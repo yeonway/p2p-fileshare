@@ -19,6 +19,7 @@ from app.rate_limit import clear_rate_limits
 def client(tmp_path, monkeypatch):
     db_path = tmp_path / "app.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("STORED_FILES_DIR", str(tmp_path / "stored_files"))
     monkeypatch.delenv("PUBLIC_ORIGINS", raising=False)
     monkeypatch.delenv("PUBLIC_ORIGIN", raising=False)
     monkeypatch.setenv("IP_HASH_SALT", "test-salt")

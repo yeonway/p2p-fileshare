@@ -412,6 +412,22 @@ input[type="text"]:focus {
     box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
 }
 
+.toggle-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 0;
+    color: var(--ink);
+    font-size: 15px;
+    font-weight: 850;
+}
+
+.toggle-row input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--teal);
+}
+
 input[type="file"]::file-selector-button {
     min-height: 34px;
     margin-right: 12px;

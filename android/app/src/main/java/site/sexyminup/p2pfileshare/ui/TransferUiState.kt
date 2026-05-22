@@ -25,4 +25,6 @@ data class TransferUiState(
     val error: String? = null,
     val errorCode: String? = null,
     val pendingSaveFileName: String? = null,
+    val restartAvailable: Boolean = false,
+    val autoResetOnComplete: Boolean = true,
 )
