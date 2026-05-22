@@ -8,6 +8,7 @@ data class TransferUiState(
     val selectedFileName: String? = null,
     val selectedFileSize: Long = 0,
     val selectedFileMimeType: String = "application/octet-stream",
+    val selectedFileCount: Int = 0,
     val receiveMimeType: String = "application/octet-stream",
     val roomCode: String? = null,
     val shareUrl: String? = null,

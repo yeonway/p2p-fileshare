@@ -22,6 +22,7 @@
 - Windows Tauri WebView sender/receiver MVP
 - Web PWA 설치 manifest/service worker
 - Android Foreground Service 전송 알림
+- Android 다중 파일 선택/전송. 여러 파일은 수신 호환성을 위해 하나의 `.tar` 묶음으로 스트리밍됩니다.
 - 중단/타임아웃/저장 실패 공통 오류 코드
 - 송신 QR과 Android 딥링크/웹 fallback 링크
 - 기본 chunk size 64KiB
@@ -157,7 +158,7 @@ pytest
 
 ## 대용량 파일과 화질
 
-파일은 원본 binary bytes 그대로 chunk 전송됩니다. 동영상/이미지/오디오는 decode, encode, 압축, 변환, 재인코딩하지 않습니다. 기본 chunk size는 WebRTC 호환성을 위해 64KiB입니다.
+단일 파일은 원본 binary bytes 그대로 chunk 전송됩니다. 동영상/이미지/오디오는 decode, encode, 압축, 변환, 재인코딩하지 않습니다. Android에서 여러 파일을 고르면 파일 본문을 압축하지 않는 `.tar` 묶음으로 스트리밍합니다. 기본 chunk size는 WebRTC 호환성을 위해 64KiB입니다.
 
 ## 미완성/제한사항
 

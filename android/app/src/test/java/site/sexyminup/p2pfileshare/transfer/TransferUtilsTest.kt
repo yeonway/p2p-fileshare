@@ -40,6 +40,24 @@ class TransferUtilsTest {
     }
 
     @Test
+    fun tarHelpersCreatePortableArchiveParts() {
+        assertEquals(0L, 0L.roundUpToTarBlock())
+        assertEquals(512L, 1L.roundUpToTarBlock())
+        assertEquals(512L, 512L.roundUpToTarBlock())
+        assertEquals(1024L, 513L.roundUpToTarBlock())
+        assertEquals("001_video.mp4", tarEntryPath("../secret/video.mp4", 0))
+
+        val header = tarHeader("folder/file.txt", 123)
+        assertEquals(512, header.size)
+        assertEquals('0'.code.toByte(), header[156])
+        assertEquals('_'.code.toByte(), header[6])
+
+        val pax = paxRecords("001_한글.txt", 123).decodeToString()
+        assertTrue(pax.contains("path=001_한글.txt\n"))
+        assertTrue(pax.contains("size=123\n"))
+    }
+
+    @Test
     fun transferControlMessagesKeepTypeWhenDefaultEncodingIsDisabled() {
         val json = Json { encodeDefaults = false }
         val manifest = json.encodeManifest(

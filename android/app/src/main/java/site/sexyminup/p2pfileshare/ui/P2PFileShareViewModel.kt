@@ -13,8 +13,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -33,6 +35,7 @@ import site.sexyminup.p2pfileshare.transfer.FileMetadata
 import site.sexyminup.p2pfileshare.transfer.ManifestMessage
 import site.sexyminup.p2pfileshare.transfer.ReceiverCompleteMessage
 import site.sexyminup.p2pfileshare.transfer.SenderFinishedMessage
+import site.sexyminup.p2pfileshare.transfer.END_OF_ARCHIVE_BYTES
 import site.sexyminup.p2pfileshare.transfer.TransferErrorCodes
 import site.sexyminup.p2pfileshare.transfer.chunkCount
 import site.sexyminup.p2pfileshare.transfer.encodeAck
@@ -43,6 +46,12 @@ import site.sexyminup.p2pfileshare.transfer.encodeSenderFinished
 import site.sexyminup.p2pfileshare.transfer.messageType
 import site.sexyminup.p2pfileshare.transfer.queryFileMetadata
 import site.sexyminup.p2pfileshare.transfer.resolveDataChannelChunkSize
+import site.sexyminup.p2pfileshare.transfer.roundUpToTarBlock
+import site.sexyminup.p2pfileshare.transfer.tarArchiveName
+import site.sexyminup.p2pfileshare.transfer.tarArchiveSize
+import site.sexyminup.p2pfileshare.transfer.tarEntryPath
+import site.sexyminup.p2pfileshare.transfer.tarHeader
+import site.sexyminup.p2pfileshare.transfer.paxRecords
 import site.sexyminup.p2pfileshare.webrtc.WebRtcManager
 import java.io.InputStream
 import java.io.OutputStream
@@ -69,7 +78,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     private var webRtcManager: WebRtcManager? = null
     private var controlChannel: DataChannel? = null
     private var fileChannel: DataChannel? = null
-    private var sendFile: FileMetadata? = null
+    private var sendFiles: List<FileMetadata> = emptyList()
     private var transferId: String? = null
     private var sendingStarted = false
     private var senderFinished = false
@@ -90,6 +99,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     private var lastProgressAt = 0L
     private var transferStartedAt = 0L
     private var timeoutJob: Job? = null
+    private var autoResetJob: Job? = null
     private var foregroundActive = false
     private var lastForegroundUpdateAt = 0L
     private var lastForegroundStatus = ""
@@ -126,19 +136,25 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    fun selectSendFile(uri: Uri) {
-        runCatching { queryFileMetadata(contentResolver, uri) }
-            .onSuccess { file ->
-                sendFile = file
+    fun selectSendFiles(uris: List<Uri>) {
+        cancelAutoReset()
+        runCatching {
+            uris.distinct().map { queryFileMetadata(contentResolver, it) }
+                .also { require(it.isNotEmpty()) { "보낼 파일을 선택하세요." } }
+        }.onSuccess { files ->
+                sendFiles = files
+                val payloadSize = payloadSize(files)
+                val payloadName = payloadName(files)
                 _uiState.update {
                     it.copy(
-                        selectedFileName = file.name,
-                        selectedFileSize = file.size,
-                        selectedFileMimeType = file.mimeType,
-                        totalBytes = file.size,
+                        selectedFileName = payloadName,
+                        selectedFileSize = payloadSize,
+                        selectedFileMimeType = payloadMimeType(files),
+                        selectedFileCount = files.size,
+                        totalBytes = payloadSize,
                         progressBytes = 0L,
                         error = null,
-                        status = "파일 선택됨",
+                        status = if (files.size == 1) "파일 선택됨" else "${files.size}개 파일 선택됨",
                     )
                 }
             }
@@ -165,7 +181,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun createSendRoom() {
-        val file = sendFile ?: run {
+        val files = sendFiles.takeIf { it.isNotEmpty() } ?: run {
             setError("보낼 파일을 먼저 선택하세요.")
             return
         }
@@ -177,7 +193,8 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                 val loadedConfig = apiClient.getConfig(serverUrl)
                 config = loadedConfig
                 setStatus("방 생성 중")
-                val created = apiClient.createRoom(serverUrl, file.name, file.size, normalizeMimeType(file.mimeType))
+                val payloadSize = payloadSize(files)
+                val created = apiClient.createRoom(serverUrl, payloadName(files), payloadSize, payloadMimeType(files))
                 room = created
                 transferId = UUID.randomUUID().toString()
                 _uiState.update {
@@ -187,7 +204,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
                         shareUrl = shareUrl,
                         qrPayload = shareUrl,
                         expiresAt = created.expiresAt,
-                        totalBytes = file.size,
+                        totalBytes = payloadSize,
                     )
                 }
                 setStatus("상대 접속 대기 중")
@@ -264,14 +281,37 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun resetTransfer() {
+        cancelAutoReset()
         timeoutJob?.cancel()
         closeReceiveQueue(cancelWriter = true)
         signalingClient.close()
         webRtcManager?.close()
         outputStream?.closeQuietly()
         outputStream = null
+        config = null
+        room = null
+        receiveRoom = null
+        sendFiles = emptyList()
         controlChannel = null
         fileChannel = null
+        transferId = null
+        sendingStarted = false
+        senderFinished = false
+        receiverComplete = false
+        bytesSent = 0L
+        ackedBytes = 0L
+        chunksSent = 0L
+        manifest = null
+        bytesReceived = 0L
+        chunkIndex = -1L
+        receiverSenderFinished = false
+        completed = false
+        failed = false
+        lastAckAt = 0L
+        lastProgressAt = 0L
+        transferStartedAt = 0L
+        lastForegroundUpdateAt = 0L
+        lastForegroundStatus = ""
         stopForeground()
         _uiState.update {
             TransferUiState(
@@ -434,16 +474,18 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun sendManifest() {
-        val file = sendFile ?: return
+        val files = sendFiles
+        if (files.isEmpty()) return
         val channel = controlChannel ?: return
         val chunkSize = resolveChunkSize()
+        val payloadSize = payloadSize(files)
         val manifest = ManifestMessage(
             transferId = requireNotNull(transferId),
-            fileName = file.name,
-            fileSize = file.size,
-            mimeType = normalizeMimeType(file.mimeType),
+            fileName = payloadName(files),
+            fileSize = payloadSize,
+            mimeType = payloadMimeType(files),
             chunkSize = chunkSize,
-            chunkCount = chunkCount(file.size, chunkSize),
+            chunkCount = chunkCount(payloadSize, chunkSize),
         )
         if (!channel.safeSendText(json.encodeManifest(manifest))) {
             failTransfer("control DataChannel로 manifest를 보낼 수 없습니다.", TransferErrorCodes.DATA_CHANNEL_CLOSED)
@@ -487,7 +529,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
 
     private suspend fun handleAck(message: AckMessage) {
         ackedBytes = max(ackedBytes, message.receivedBytes)
-        updateProgress(ackedBytes, sendFile?.size ?: 0L)
+        updateProgress(ackedBytes, sendFiles.takeIf { it.isNotEmpty() }?.let(::payloadSize) ?: 0L)
         if (message.receivedBytes == 0L && !sendingStarted) {
             runCatching { sendFileChunks() }
                 .onFailure { failTransfer(it.message ?: "DataChannel 전송 실패", TransferErrorCodes.DATA_CHANNEL_TIMEOUT) }
@@ -511,37 +553,44 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun handleReceiverComplete(message: ReceiverCompleteMessage) {
-        val file = sendFile ?: return
-        if (message.totalBytes != file.size) {
+        val expected = sendFiles.takeIf { it.isNotEmpty() }?.let(::payloadSize) ?: return
+        if (message.totalBytes != expected) {
             failTransfer("수신 완료 크기가 원본과 일치하지 않습니다.", TransferErrorCodes.SIZE_MISMATCH)
             return
         }
         receiverComplete = true
         completed = true
-        updateProgress(file.size, file.size)
+        updateProgress(expected, expected)
         setStatus("완료")
         stopForeground()
+        scheduleAutoResetAfterComplete()
     }
 
     private suspend fun sendFileChunks() {
-        val file = sendFile ?: return
+        val files = sendFiles
+        if (files.isEmpty()) return
         val fileChannel = fileChannel ?: error("file DataChannel이 준비되지 않았습니다.")
+        val expected = payloadSize(files)
         sendingStarted = true
         transferStartedAt = System.nanoTime()
         bytesSent = 0L
         chunksSent = 0L
         ackedBytes = 0L
-        _uiState.update { it.copy(status = "전송 중", progressBytes = 0L, totalBytes = file.size) }
+        _uiState.update { it.copy(status = "전송 중", progressBytes = 0L, totalBytes = expected) }
         startForeground("전송 중")
         updateForeground()
         sendSignaling(WsMessage(type = "transfer-started"))
         waitForDataChannelOpen(fileChannel)
         val chunkSize = resolveChunkSize()
-        withContext(Dispatchers.IO) {
-            contentResolver.openInputStream(file.uri).use { input ->
-                requireNotNull(input) { "파일을 열 수 없습니다." }
-                readAndSend(input, fileChannel, chunkSize)
+        if (files.size == 1) {
+            withContext(Dispatchers.IO) {
+                contentResolver.openInputStream(files.first().uri).use { input ->
+                    requireNotNull(input) { "파일을 열 수 없습니다." }
+                    readAndSend(input, fileChannel, chunkSize)
+                }
             }
+        } else {
+            sendTarBundle(files, fileChannel, chunkSize)
         }
         setStatus("전송 버퍼 비우는 중")
         waitForDrain(fileChannel, lowWaterBytes(chunkSize), timeoutMs = activeTimeoutMs())
@@ -550,7 +599,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
             json.encodeSenderFinished(
                 SenderFinishedMessage(
                     transferId = requireNotNull(transferId),
-                    totalBytes = file.size,
+                    totalBytes = expected,
                     lastChunkIndex = chunksSent - 1,
                 ),
             ),
@@ -565,14 +614,57 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
             val read = input.read(buffer)
             if (read < 0) break
             val payload = if (read == buffer.size) buffer.copyOf() else buffer.copyOf(read)
-            sendBinaryChunk(channel, payload, chunkSize, timeoutMs = activeTimeoutMs())
-            bytesSent += read
-            chunksSent += 1
-            val now = System.currentTimeMillis()
-            if (now - lastProgressAt >= 1000L) {
-                lastProgressAt = now
-                sendSignaling(WsMessage(type = "transfer-progress", bytesSent = bytesSent))
+            sendPayloadBytes(channel, payload, chunkSize)
+        }
+    }
+
+    private suspend fun sendTarBundle(files: List<FileMetadata>, channel: DataChannel, chunkSize: Int) {
+        files.forEachIndexed { index, file ->
+            val path = tarEntryPath(file.name, index)
+            val paxData = paxRecords(path, file.size)
+            sendPayloadBytes(channel, tarHeader("PaxHeaders.${index + 1}", paxData.size.toLong(), 'x'.code.toByte()), chunkSize)
+            sendPayloadBytes(channel, paxData, chunkSize)
+            sendZeroPadding(channel, paxData.size.toLong(), chunkSize)
+            sendPayloadBytes(channel, tarHeader(path, file.size), chunkSize)
+            withContext(Dispatchers.IO) {
+                contentResolver.openInputStream(file.uri).use { input ->
+                    requireNotNull(input) { "파일을 열 수 없습니다: ${file.name}" }
+                    readAndSend(input, channel, chunkSize)
+                }
             }
+            sendZeroPadding(channel, file.size, chunkSize)
+        }
+        sendPayloadBytes(channel, ByteArray(END_OF_ARCHIVE_BYTES.toInt()), chunkSize)
+    }
+
+    private suspend fun sendZeroPadding(channel: DataChannel, byteCount: Long, chunkSize: Int) {
+        val padding = byteCount.roundUpToTarBlock() - byteCount
+        var remaining = padding
+        while (remaining > 0L) {
+            val size = minOf(chunkSize.toLong(), remaining).toInt()
+            sendPayloadBytes(channel, ByteArray(size), chunkSize)
+            remaining -= size
+        }
+    }
+
+    private suspend fun sendPayloadBytes(channel: DataChannel, data: ByteArray, chunkSize: Int) {
+        var offset = 0
+        while (offset < data.size) {
+            val count = minOf(chunkSize, data.size - offset)
+            val payload = if (offset == 0 && count == data.size) data else data.copyOfRange(offset, offset + count)
+            sendBinaryChunk(channel, payload, chunkSize, timeoutMs = activeTimeoutMs())
+            bytesSent += count
+            chunksSent += 1
+            sendPeriodicSenderProgress()
+            offset += count
+        }
+    }
+
+    private fun sendPeriodicSenderProgress() {
+        val now = System.currentTimeMillis()
+        if (now - lastProgressAt >= 1000L) {
+            lastProgressAt = now
+            sendSignaling(WsMessage(type = "transfer-progress", bytesSent = bytesSent))
         }
     }
 
@@ -682,7 +774,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
 
     private fun handleFileChannelClosed() {
         if (completed || failed) return
-        val expected = manifest?.fileSize ?: sendFile?.size ?: return
+        val expected = manifest?.fileSize ?: sendFiles.takeIf { it.isNotEmpty() }?.let(::payloadSize) ?: return
         val current = if (manifest != null) bytesReceived else ackedBytes
         if (current >= expected) return
         if (receiverSenderFinished) {
@@ -724,9 +816,18 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
             failTransfer("수신 저장 큐가 준비되지 않았습니다.", TransferErrorCodes.DATA_CHANNEL_CLOSED)
             return
         }
-        if (queue.trySend(data).isFailure) {
+        if (queue.trySend(data).isSuccess) {
+            return
+        }
+        runCatching {
+            runBlocking {
+                withTimeout(activeTimeoutMs()) {
+                    queue.send(data)
+                }
+            }
+        }.onFailure {
             failTransfer(
-                "수신 처리 버퍼가 가득 찼습니다. 전송 속도를 따라가지 못해 중단했습니다.",
+                "수신 저장 속도가 전송 속도를 따라가지 못해 대기 시간이 초과되었습니다.",
                 TransferErrorCodes.RECEIVE_QUEUE_FULL,
             )
         }
@@ -743,6 +844,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
 
     private fun failTransfer(message: String, code: String = TransferErrorCodes.UNKNOWN) {
         if (completed || failed) return
+        cancelAutoReset()
         failed = true
         timeoutJob?.cancel()
         controlChannel?.safeSendText(json.encodeError(ErrorMessage(transferId = transferId ?: manifest?.transferId, code = code, message = message)))
@@ -760,6 +862,7 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun startFreshTransfer(status: String) {
+        cancelAutoReset()
         timeoutJob?.cancel()
         closeReceiveQueue(cancelWriter = true)
         signalingClient.close()
@@ -801,6 +904,23 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         lastForegroundUpdateAt = 0L
         lastForegroundStatus = ""
         foregroundActive = false
+    }
+
+    private fun scheduleAutoResetAfterComplete() {
+        val completedTransferId = transferId
+        cancelAutoReset()
+        autoResetJob = viewModelScope.launch {
+            delay(AUTO_RESET_DELAY_MS)
+            if (completed && !failed && transferId == completedTransferId) {
+                autoResetJob = null
+                resetTransfer()
+            }
+        }
+    }
+
+    private fun cancelAutoReset() {
+        autoResetJob?.cancel()
+        autoResetJob = null
     }
 
     private fun setStatus(status: String) {
@@ -874,6 +994,15 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
 
     private fun buildReceiveUrl(serverUrl: String, code: String): String =
         "${serverUrl.trimEnd('/')}/receive?code=$code"
+
+    private fun payloadName(files: List<FileMetadata>): String =
+        if (files.size == 1) files.first().name else tarArchiveName(files.size)
+
+    private fun payloadSize(files: List<FileMetadata>): Long =
+        if (files.size == 1) files.first().size else tarArchiveSize(files)
+
+    private fun payloadMimeType(files: List<FileMetadata>): String =
+        if (files.size == 1) normalizeMimeType(files.first().mimeType) else "application/x-tar"
 
     private fun resolveChunkSize(): Int = resolveDataChannelChunkSize(config?.chunkSizeBytes)
 
@@ -973,5 +1102,6 @@ class P2PFileShareViewModel(application: Application) : AndroidViewModel(applica
         const val ACK_CHUNK_INTERVAL = 64
         const val RECEIVE_QUEUE_CAPACITY = 512
         const val FOREGROUND_UPDATE_INTERVAL_MS = 500L
+        const val AUTO_RESET_DELAY_MS = 2000L
     }
 }

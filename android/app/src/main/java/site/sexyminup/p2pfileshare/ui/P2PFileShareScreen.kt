@@ -224,7 +224,10 @@ private fun SendSection(
             Text("보낼 파일 선택")
         }
         if (state.selectedFileName != null) {
-            KeyValue("파일", state.selectedFileName)
+            KeyValue(if (state.selectedFileCount > 1) "파일 묶음" else "파일", state.selectedFileName)
+            if (state.selectedFileCount > 1) {
+                KeyValue("개수", "${state.selectedFileCount}개")
+            }
             KeyValue("크기", formatBytes(state.selectedFileSize))
             KeyValue("형식", state.selectedFileMimeType)
             Button(onClick = onCreateRoom, modifier = Modifier.fillMaxWidth().height(56.dp)) {

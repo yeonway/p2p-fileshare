@@ -10,7 +10,8 @@ This protocol is shared by the Web, Android, and Windows clients.
 - The `control` DataChannel carries ordered JSON messages.
 - The `file` DataChannel carries ordered binary chunks.
 - Control and file channels are independent; ordering is not guaranteed across the two channels.
-- Files are transferred as original binary bytes. No compression, conversion, decoding, or re-encoding is allowed.
+- Single files are transferred as original binary bytes. No compression, conversion, decoding, or re-encoding is allowed.
+- Multi-file sends may expose one archive payload for receiver compatibility. Android uses an uncompressed POSIX tar stream with `mime_type: application/x-tar`.
 - MVP integrity validation is `received_bytes == file_size`.
 - Hash validation is a future incremental-hash extension.
 

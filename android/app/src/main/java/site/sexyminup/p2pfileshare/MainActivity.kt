@@ -46,12 +46,14 @@ class MainActivity : ComponentActivity() {
                         contract = ActivityResultContracts.StartActivityForResult(),
                         onResult = {},
                     )
-                    val openDocument = rememberLauncherForActivityResult(
-                        contract = ActivityResultContracts.OpenDocument(),
-                        onResult = { uri: Uri? ->
-                            uri?.let {
-                                persistUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                viewModel.selectSendFile(it)
+                    val openDocuments = rememberLauncherForActivityResult(
+                        contract = ActivityResultContracts.OpenMultipleDocuments(),
+                        onResult = { uris: List<Uri> ->
+                            if (uris.isNotEmpty()) {
+                                uris.forEach {
+                                    persistUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                viewModel.selectSendFiles(uris)
                             }
                         },
                     )
@@ -96,7 +98,7 @@ class MainActivity : ComponentActivity() {
                     P2PFileShareScreen(
                         state = state,
                         onPickSendFile = {
-                            runCatching { openDocument.launch(arrayOf("*/*")) }
+                            runCatching { openDocuments.launch(arrayOf("*/*")) }
                                 .onFailure {
                                     viewModel.reportPickerError(it.message ?: "파일 선택기를 열 수 없습니다.")
                                 }

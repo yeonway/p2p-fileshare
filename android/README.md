@@ -7,10 +7,11 @@ Kotlin + Jetpack Compose + Native WebRTC 기반 Android MVP입니다. 서버는 
 - REST: `/api/config`, `/api/rooms`, `/api/rooms/join`
 - WebSocket: signaling/status JSON only
 - DataChannel: `control` JSON channel + `file` binary channel
-- 파일 선택: Storage Access Framework `ACTION_OPEN_DOCUMENT`
+- 파일 선택: Storage Access Framework `ACTION_OPEN_DOCUMENT` / `ACTION_OPEN_DOCUMENT_MULTIPLE`
 - 파일 저장: Storage Access Framework `ACTION_CREATE_DOCUMENT`
 - sender: `InputStream` chunk read + `DataChannel.bufferedAmount()` backpressure
 - receiver: `OutputStream` chunk write + size validation
+- 다중 파일 전송: 선택한 파일들을 압축하지 않은 `.tar` 묶음으로 스트리밍
 - 완료 조건:
   - sender는 `receiver-complete` 전까지 완료 처리하지 않음
   - receiver는 `receivedBytes == manifest.file_size`이고 writer close 완료 후 `receiver-complete` 전송
