@@ -3,16 +3,15 @@
 기준 경로:
 
 ```text
-/home/user/server/p2p-fileshare
+/home/user/07_send_any_where
 ```
 
 ## 1. 설치
 
 ```bash
-sudo mkdir -p /home/user/server
-cd /home/user/server
-git clone <repo-url> p2p-fileshare
-cd p2p-fileshare/server
+cd /home/user
+git clone <repo-url> 07_send_any_where
+cd 07_send_any_where/server
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
@@ -39,7 +38,7 @@ STORED_READY_TTL_MINUTES=30
 ## 2. 로컬 실행 확인
 
 ```bash
-cd /home/user/server/p2p-fileshare/server
+cd /home/user/07_send_any_where/server
 . .venv/bin/activate
 uvicorn app.main:app --host 127.0.0.1 --port 8010
 ```
@@ -59,7 +58,7 @@ curl http://127.0.0.1:8010/health
 ## 3. systemd 등록
 
 ```bash
-sudo cp /home/user/server/p2p-fileshare/systemd/p2p-fileshare.service /etc/systemd/system/
+sudo cp /home/user/07_send_any_where/systemd/p2p-fileshare.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now p2p-fileshare
 sudo systemctl status p2p-fileshare

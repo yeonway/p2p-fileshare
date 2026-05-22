@@ -48,7 +48,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8010
 이미 라즈베리파이에 repo가 clone되어 있다면 아래처럼 현재 작업 브랜치를 받아 적용합니다.
 
 ```bash
-cd /home/user/server/p2p-fileshare
+cd /home/user/07_send_any_where
 git fetch origin
 git checkout codex/windows-app-fixes
 git pull --ff-only
@@ -84,7 +84,7 @@ sudo systemctl status p2p-fileshare
 직접 실행할 때는 다음 명령을 사용합니다.
 
 ```bash
-cd /home/user/server/p2p-fileshare/server
+cd /home/user/07_send_any_where/server
 . .venv/bin/activate
 uvicorn app.main:app --host 127.0.0.1 --port 8010
 ```
