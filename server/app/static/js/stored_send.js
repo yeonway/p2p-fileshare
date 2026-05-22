@@ -37,9 +37,16 @@
         App.byId("autoResetToggle").checked = saved !== "0";
     }
 
-    function chooseFiles(fileList) {
+    function fileItem(file, relativePath) {
+        return {
+            file: file,
+            relativePath: relativePath || file.webkitRelativePath || file.name
+        };
+    }
+
+    function chooseItems(items) {
         clearTimers();
-        state.files = Array.prototype.slice.call(fileList || []);
+        state.files = items || [];
         state.transfer = null;
         state.uploadToken = null;
         state.bytesUploaded = 0;
@@ -52,12 +59,43 @@
         updateSelection();
     }
 
+    function chooseFiles(fileList) {
+        chooseItems(Array.prototype.slice.call(fileList || []).map(function (file) {
+            return fileItem(file);
+        }));
+    }
+
+    async function chooseFolderWithDirectoryPicker() {
+        var root = await window.showDirectoryPicker();
+        var items = [];
+        await collectDirectoryFiles(root, "", items);
+        chooseItems(items);
+    }
+
+    async function collectDirectoryFiles(directoryHandle, prefix, items) {
+        for await (var entry of directoryHandle.entries()) {
+            var name = entry[0];
+            var handle = entry[1];
+            var path = prefix ? prefix + "/" + name : name;
+            if (handle.kind === "file") {
+                items.push(fileItem(await handle.getFile(), path));
+            } else if (handle.kind === "directory") {
+                await collectDirectoryFiles(handle, path, items);
+            }
+        }
+    }
+
+    function supportsDirectoryInput() {
+        var input = document.createElement("input");
+        return "webkitdirectory" in input || "directory" in input;
+    }
+
     function relativePath(file) {
-        return file.webkitRelativePath || file.name;
+        return file.relativePath || file.file.webkitRelativePath || file.file.name;
     }
 
     function totalSize() {
-        return state.files.reduce(function (sum, file) { return sum + file.size; }, 0);
+        return state.files.reduce(function (sum, item) { return sum + item.file.size; }, 0);
     }
 
     function updateSelection() {
@@ -78,8 +116,8 @@
         var entries = state.files.map(function (file) {
             return {
                 relative_path: relativePath(file),
-                file_size: file.size,
-                mime_type: file.type || "application/octet-stream"
+                file_size: file.file.size,
+                mime_type: file.file.type || "application/octet-stream"
             };
         });
         var response = await App.apiJson("/api/stored/transfers", {
@@ -152,7 +190,8 @@
 
         for (var entryIndex = 0; entryIndex < status.entries.length; entryIndex += 1) {
             var entry = status.entries[entryIndex];
-            var file = state.files[entryIndex];
+            var item = state.files[entryIndex];
+            var file = item.file;
             var uploaded = {};
             (entry.uploaded_chunks || []).forEach(function (chunk) { uploaded[chunk] = true; });
             for (var chunkIndex = 0; chunkIndex < entry.chunk_count; chunkIndex += 1) {
@@ -284,7 +323,23 @@
         App.byId("pickFilesButton").addEventListener("click", function () {
             App.byId("fileInput").click();
         });
-        App.byId("pickFolderButton").addEventListener("click", function () {
+        App.byId("pickFolderButton").addEventListener("click", async function () {
+            if (typeof window.showDirectoryPicker === "function") {
+                try {
+                    await chooseFolderWithDirectoryPicker();
+                    return;
+                } catch (error) {
+                    if (error && error.name === "AbortError") {
+                        return;
+                    }
+                    setError(error.message || "폴더를 열지 못했습니다.");
+                    return;
+                }
+            }
+            if (!supportsDirectoryInput()) {
+                setError("이 브라우저는 폴더 선택을 지원하지 않습니다. 여러 파일 선택을 사용하세요.");
+                return;
+            }
             App.byId("folderInput").click();
         });
         App.byId("fileInput").addEventListener("change", function (event) {

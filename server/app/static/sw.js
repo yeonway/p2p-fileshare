@@ -1,4 +1,4 @@
-const CACHE_NAME = "send-honey-where-v7";
+const CACHE_NAME = "send-honey-where-v8";
 const CORE_ASSETS = [
   "/",
   "/send",
@@ -8,7 +8,7 @@ const CORE_ASSETS = [
   "/manifest.webmanifest",
   "/static/css/style.css?v=send-honey-where",
   "/static/js/common.js?v=send-honey-where-7",
-  "/static/js/stored_send.js?v=send-honey-where-1",
+  "/static/js/stored_send.js?v=send-honey-where-2",
   "/static/js/stored_receive.js?v=send-honey-where-1",
   "/static/js/webrtc_protocol.js?v=send-honey-where-6",
   "/static/js/send.js?v=send-honey-where-7",

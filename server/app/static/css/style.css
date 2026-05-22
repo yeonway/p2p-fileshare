@@ -441,6 +441,15 @@ input[type="file"]::file-selector-button {
     cursor: pointer;
 }
 
+.file-picker-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+}
+
 .code-input input {
     max-width: 220px;
     font-size: 26px;
